@@ -216,7 +216,7 @@ def compute_scaled_output_size(cap_w: int, cap_h: int, scale: float) -> tuple[in
     """Scale both capture dimensions uniformly by a float multiplier without distortion."""
     safe_w = max(1, int(cap_w))
     safe_h = max(1, int(cap_h))
-    safe_scale = max(0.05, min(10.0, float(scale)))
+    safe_scale = max(0.05, min(9.99, float(scale)))
     if abs(safe_scale - 1.0) < 1e-6:
         return (safe_w, safe_h)
     return (max(1, round(safe_w * safe_scale)), max(1, round(safe_h * safe_scale)))

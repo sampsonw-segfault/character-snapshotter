@@ -77,10 +77,10 @@ def test_config_defaults_roundtrip_and_fallback(tmp_path: Path) -> None:
         default_height=600,
         box_x=-1200,
         box_y=250,
-        box_width=700,
-        box_height=700,
+        box_width=12345,
+        box_height=99999,
         square_lock=False,
-        scale=0.7143,
+        scale=0.71,
         overlay_opacity=0.6,
         play_chime=False,
     )
@@ -103,7 +103,7 @@ def test_config_defaults_roundtrip_and_fallback(tmp_path: Path) -> None:
     sanitized = load_config(cfg_path)
     assert sanitized.box_width == 16
     assert sanitized.overlay_opacity == pytest.approx(0.85)
-    assert sanitized.scale == pytest.approx(10.0)
+    assert sanitized.scale == pytest.approx(9.99)
 
     cfg_path.write_text('{"scale": 0.001}', encoding="utf-8")
     assert load_config(cfg_path).scale == pytest.approx(0.05)
@@ -113,10 +113,10 @@ def test_config_defaults_roundtrip_and_fallback(tmp_path: Path) -> None:
     ("cap_w", "cap_h", "scale", "expected"),
     [
         (500, 500, 1.0, (500, 500)),
-        (700, 700, 0.7143, (500, 500)),
-        (350, 350, 1.4286, (500, 500)),
-        (800, 400, 0.5, (400, 200)),
-        (300, 200, 2.0, (600, 400)),
+        (700, 700, 0.71, (497, 497)),
+        (350, 350, 1.43, (500, 500)),
+        (800, 400, 0.50, (400, 200)),
+        (300, 200, 2.00, (600, 400)),
     ],
 )
 def test_uniform_float_scaling_no_warping(
@@ -441,16 +441,33 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         assert hud.isVisible()
         assert not hasattr(hud, "reset_btn")
         assert not hasattr(hud, "square_btn")
+        assert hud.cap_w_spin.maximum() == 99999
+        assert hud.cap_h_spin.maximum() == 99999
+        assert hud.cap_w_spin.width() > hud.scale_spin.width()
         assert hud.cap_w_spin.value() == 500
         assert hud.cap_h_spin.value() == 500
+        assert hud.scale_spin.decimals() == 2
         assert hud.scale_spin.value() == pytest.approx(1.0)
-        assert hud.scale_spin.textFromValue(1.0) == "1"
+        assert hud.scale_spin.textFromValue(1.0) == "1.00"
         assert hud.cap_w_spin.lineEdit().width() >= 40
         assert hud.cap_h_spin.lineEdit().width() >= 40
-        assert hud.scale_spin.lineEdit().width() >= 40
+        assert hud.scale_spin.lineEdit().width() >= 36
         assert hud.cap_w_spin.lineEdit().text() == "500"
         assert hud.cap_h_spin.lineEdit().text() == "500"
-        assert hud.scale_spin.lineEdit().text() == "1"
+        assert hud.scale_spin.lineEdit().text() == "1.00"
+
+        # Typing "1" or "1.1" pads trailing zero(s) on commit/editingFinished
+        hud.scale_spin.lineEdit().setText("1.1")
+        hud.scale_spin.interpretText()
+        hud.scale_spin.editingFinished.emit()
+        qapp.processEvents()
+        assert hud.scale_spin.lineEdit().text() == "1.10"
+
+        hud.scale_spin.lineEdit().setText("1")
+        hud.scale_spin.interpretText()
+        hud.scale_spin.editingFinished.emit()
+        qapp.processEvents()
+        assert hud.scale_spin.lineEdit().text() == "1.00"
 
         # Editing capture width and height updates box dimensions independently and live
         hud.cap_w_spin.setValue(800)
@@ -461,10 +478,11 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         assert hud.cap_w_spin.value() == 800
         assert hud.cap_h_spin.value() == 400
 
-        # Editing float scale multiplier updates controller.scale
+        # Editing float scale multiplier updates controller.scale and formats to 2 decimals
         hud.scale_spin.setValue(0.5)
         qapp.processEvents()
         assert controller.scale == pytest.approx(0.5)
+        assert hud.scale_spin.lineEdit().text() == "0.50"
 
         # Box resize/nudge keeps HUD input fields synced to live capture dimensions
         controller.set_box_rect(PhysicalRect(150, 150, 650, 650))
@@ -595,9 +613,9 @@ def test_two_tap_snapshotter_app_flow(
         output_dir=str(out_dir),
         box_x=50,
         box_y=50,
-        box_width=350,
-        box_height=350,
-        scale=1.4286,
+        box_width=1000,
+        box_height=1000,
+        scale=0.50,
         play_chime=False,
     )
     app_ctrl = SnapshotterApp(config=cfg)

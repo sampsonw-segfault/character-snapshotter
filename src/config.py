@@ -10,11 +10,11 @@ from typing import Any
 
 
 MIN_BOX_SIZE = 16
-MAX_BOX_SIZE = 9999
+MAX_BOX_SIZE = 99999
 MIN_OPACITY = 0.10
 MAX_OPACITY = 0.85
 MIN_SCALE = 0.05
-MAX_SCALE = 10.0
+MAX_SCALE = 9.99
 DEFAULT_SCALE = 1.0
 DEFAULT_HOTKEY = "Win+Alt+S"
 DEFAULT_BRIDGE_PORT = 47821
@@ -118,7 +118,7 @@ def validate_config(cfg: AppConfig) -> AppConfig:
         box_width=_coerce_int(cfg.box_width, defaults.box_width, MIN_BOX_SIZE, MAX_BOX_SIZE),
         box_height=_coerce_int(cfg.box_height, defaults.box_height, MIN_BOX_SIZE, MAX_BOX_SIZE),
         square_lock=bool(cfg.square_lock),
-        scale=_coerce_float(cfg.scale, defaults.scale, MIN_SCALE, MAX_SCALE),
+        scale=round(_coerce_float(cfg.scale, defaults.scale, MIN_SCALE, MAX_SCALE), 2),
         overlay_opacity=_coerce_float(cfg.overlay_opacity, defaults.overlay_opacity, MIN_OPACITY, MAX_OPACITY),
         play_chime=bool(cfg.play_chime),
         capture_mode=capture_mode,

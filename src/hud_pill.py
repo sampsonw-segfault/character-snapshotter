@@ -28,7 +28,7 @@ class _HudSpinBox(QSpinBox):
         self.setRange(MIN_BOX_SIZE, MAX_BOX_SIZE)
         self.setKeyboardTracking(False)
         self.setAlignment(Qt.AlignCenter)
-        self.setFixedWidth(58)
+        self.setFixedWidth(64)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key_Escape:
@@ -39,22 +39,27 @@ class _HudSpinBox(QSpinBox):
 
 
 class _HudScaleSpinBox(QDoubleSpinBox):
-    """Compact float multiplier spinbox formatting clean decimals without trailing zeros."""
+    """Compact 2-decimal float multiplier spinbox that pads trailing zeros."""
 
     escape_pressed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setRange(MIN_SCALE, MAX_SCALE)
-        self.setDecimals(4)
+        self.setDecimals(2)
         self.setSingleStep(0.1)
         self.setKeyboardTracking(False)
         self.setAlignment(Qt.AlignCenter)
-        self.setFixedWidth(64)
+        self.setFixedWidth(48)
+        self.editingFinished.connect(self.normalize_display)
 
     def textFromValue(self, value: float) -> str:
-        formatted = f"{value:.4f}".rstrip("0").rstrip(".")
-        return formatted if formatted else "0"
+        return f"{value:.2f}"
+
+    def normalize_display(self) -> None:
+        formatted = self.textFromValue(self.value())
+        if self.lineEdit().text() != formatted:
+            self.lineEdit().setText(formatted)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key_Escape:
@@ -220,6 +225,7 @@ class FloatingHudWidget(QWidget):
         for spin in (self.cap_w_spin, self.cap_h_spin, self.scale_spin):
             if spin.hasFocus() or spin.lineEdit().isModified():
                 spin.interpretText()
+        self.scale_spin.normalize_display()
 
     def sync_state(self, cap_w: int, cap_h: int, scale: float) -> None:
         """Synchronize live capture dimensions and scale multiplier without signal loops."""

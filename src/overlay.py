@@ -556,7 +556,7 @@ class OverlayController(QObject):
         self.set_box_rect(resized)
 
     def _on_hud_scale_edited(self, scale: float) -> None:
-        self._scale = max(MIN_SCALE, min(MAX_SCALE, float(scale)))
+        self._scale = round(max(MIN_SCALE, min(MAX_SCALE, float(scale))), 2)
         self._sync_hud()
         self.state_changed.emit()
 
