@@ -79,6 +79,7 @@ class FloatingHudWidget(QWidget):
             | Qt.WindowStaysOnTopHint
             | Qt.Tool
         )
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
 
         self._cap_w = 500

@@ -527,6 +527,60 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         qapp.processEvents()
 
 
+def _is_hwnd_above(top_hwnd: int, bot_hwnd: int) -> bool:
+    u32 = ctypes.windll.user32
+    cur = top_hwnd
+    for _ in range(1000):
+        cur = u32.GetWindow(cur, 2)  # GW_HWNDNEXT
+        if not cur:
+            return False
+        if cur == bot_hwnd:
+            return True
+    return False
+
+
+def test_hud_stays_above_overlays_after_settings_cancel(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    cfg = AppConfig(
+        output_dir=str(tmp_path),
+        box_x=100,
+        box_y=100,
+        box_width=500,
+        box_height=500,
+    )
+    controller = OverlayController()
+    try:
+        controller.show_overlay(cfg)
+        for _ in range(5):
+            qapp.processEvents()
+            ctypes.windll.kernel32.Sleep(5)
+
+        hud_hwnd = int(controller.hud_widget.winId())
+        for overlay in controller.overlay_widgets:
+            assert _is_hwnd_above(hud_hwnd, int(overlay.winId()))
+
+        controller.close_overlay()
+        dlg = SettingsDialog(cfg)
+        dlg.show()
+        qapp.processEvents()
+        dlg.reject()
+        dlg.close()
+        qapp.processEvents()
+
+        controller.show_overlay(cfg)
+        for _ in range(5):
+            qapp.processEvents()
+            ctypes.windll.kernel32.Sleep(5)
+
+        hud_hwnd = int(controller.hud_widget.winId())
+        for overlay in controller.overlay_widgets:
+            assert _is_hwnd_above(hud_hwnd, int(overlay.winId()))
+    finally:
+        controller.close_overlay()
+        qapp.processEvents()
+
+
 def test_two_tap_snapshotter_app_flow(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

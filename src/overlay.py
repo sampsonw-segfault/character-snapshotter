@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPen, QScreen
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -233,6 +233,7 @@ class ScreenOverlayWidget(QWidget):
             event.accept()
             return
 
+        self._controller.raise_hud()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
@@ -327,6 +328,11 @@ class ScreenOverlayWidget(QWidget):
     def focusOutEvent(self, event: object) -> None:
         self._controller.clear_held_arrows()
         super().focusOutEvent(event)  # type: ignore[arg-type]
+
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.WindowActivate:
+            QTimer.singleShot(0, self._controller.raise_hud)
+        super().changeEvent(event)
 
 
 class OverlayController(QObject):
@@ -443,17 +449,18 @@ class OverlayController(QObject):
             if mapping.physical.contains_point(cursor_px, cursor_py):
                 focus_overlay = widget
 
-        self._active = True
-        self._sync_hud()
-        self._hud.show()
-        self._position_hud()
-        self._hud.raise_()
-
         if focus_overlay is None and self._overlays:
             focus_overlay = self._overlays[0]
         if focus_overlay is not None:
             focus_overlay.activateWindow()
             focus_overlay.setFocus()
+
+        self._active = True
+        self._sync_hud()
+        self._hud.show()
+        self._position_hud()
+        self._hud.raise_()
+        QTimer.singleShot(0, self.raise_hud)
 
     def _center_on_cursor_monitor(self, width: int, height: int) -> PhysicalRect:
         cx, cy = get_win32_cursor_pos()
