@@ -49,7 +49,7 @@ class AppConfig:
     box_y: int | None = None
     box_width: int = 500
     box_height: int = 500
-    square_lock: bool = True
+    square_lock: bool = False
     scale: float = DEFAULT_SCALE
     overlay_opacity: float = 0.45
     play_chime: bool = True

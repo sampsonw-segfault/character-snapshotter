@@ -141,7 +141,10 @@ version_info = VSVersionInfo(
                 StringTable(
                     "040904B0",
                     [
-                        StringStruct("FileDescription", "Character Snapshotter"),
+                        StringStruct(
+                            "FileDescription",
+                            "Character Snapshotter - Fine-Tuned Pixel-Perfect Screen Snapshots",
+                        ),
                         StringStruct("FileVersion", "1.0.0"),
                         StringStruct("InternalName", "CharacterSnapshotter"),
                         StringStruct("OriginalFilename", "CharacterSnapshotter.exe"),

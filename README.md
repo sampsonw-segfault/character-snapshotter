@@ -1,6 +1,6 @@
 # Character Snapshotter
 
-A lightweight Windows screen-region snapshot utility built for quick, repeatable portrait and UI captures.
+A lightweight Windows utility built for fine-tuned, pixel-perfect screen snapshots.
 
 ## Setup
 
@@ -13,13 +13,13 @@ A lightweight Windows screen-region snapshot utility built for quick, repeatable
 
 ## Features
 
-- **2-Tap Global Hotkey Workflow** (defaults to `Win+Alt+S`, customizable in Settings):
-  - **First press:** Opens a translucent multi-monitor overlay with a crisp dashed capture box (defaults to `500×500` px and remembers your last position and size).
-  - **Second press:** Hides the overlay cleanly, captures the framed region, applies the float **Scale** multiplier (default `1.00`), saves a timestamped `.png` (`capture_YYYYMMDD_HHMMSS.png`), plays an optional audio chime, and stays closed until the next hotkey press.
-- **Multi-Monitor & Per-Monitor DPI Support:** Drag the capture box smoothly across displays, even with negative monitor coordinates or mixed Windows DPI scaling, so `500×500` is always exact physical pixels.
-- **Square & Non-Square Capture Box:** Drag top/bottom edges to resize height only, left/right edges to resize width only, and corners to scale proportionally (or hold `Shift` while dragging a corner to resize freely); press `S` to toggle default corner proportionality, or type exact dimensions directly into the pill.
-- **Uniform Float Scaling:** Set the **Scale** multiplier (default `1.00`, range `0.05` to `9.99`) on the HUD pill or in Settings to uniformly scale both dimensions using Pillow Lanczos resampling without stretching or warping.
-- **System Tray + Floating HUD Pill:** Lives quietly in the Windows system tray; quick capture button, dimension boxes, and scale control stay right outside the capture box without entering the screenshot.
+- **Fine-Tuned, Pixel-Perfect Framing** (2-tap global hotkey, defaults to `Win+Alt+S`, customizable in Settings):
+  - **First press:** Opens a translucent multi-monitor overlay with a crisp dashed capture box at your exact last size and position (defaults to `500×500` physical pixels).
+  - **Second press:** Hides the overlay cleanly, captures the exact framed pixels, applies your optional **Scale** multiplier (default `1.00`), saves a timestamped `.png` (`capture_YYYYMMDD_HHMMSS.png`), plays an optional audio chime, and stays closed until the next hotkey press.
+- **Precision Resizing & Pixel Nudging:** Drag corners freely to wherever you point (hold `Shift` to lock aspect ratio), drag top/bottom or left/right edges to adjust a single axis, type exact pixel dimensions into the floating pill, or nudge the frame `1px` or `10px` at a time with arrow keys (including diagonals).
+- **Exact Physical Pixels Across Multi-Monitor & Mixed-DPI Setups:** Drag the capture frame smoothly across displays, even with negative monitor coordinates or mixed Windows DPI scaling, so a `500×500` capture is always an exact `500×500` physical pixels.
+- **High-Quality Uniform Output Scaling:** Set the **Scale** multiplier (default `1.00`, range `0.05` to `9.99`) on the HUD pill or in Settings to uniformly resize both dimensions with Lanczos resampling without stretching or warping.
+- **Unobtrusive System Tray + Floating HUD Pill:** Lives quietly in the Windows system tray; the quick capture button, exact dimension inputs, and scale control sit right outside the capture frame so they never enter your screenshot.
 
 ## Shortcuts While Overlay Is Open
 
@@ -28,12 +28,12 @@ A lightweight Windows screen-region snapshot utility built for quick, repeatable
 | Global Hotkey (default `Win+Alt+S`) | Capture region and close overlay |
 | Drag inside box | Move capture box across displays |
 | Drag top/bottom or left/right edges | Resize height only (top/bottom) or width only (left/right) |
-| Drag corners | Scale both dimensions proportionally |
-| `Shift` + Drag corner | Invert proportional lock (resize corner freely) |
+| Drag corners | Resize width and height freely to the mouse pointer |
+| `Shift` + Drag corner | Scale corners proportionally (locks aspect ratio) |
 | `Arrow` keys (hold two for diagonal) | Nudge capture box by `1px` (opposing keys cancel) |
 | `Shift + Arrow` keys | Nudge capture box by `10px` (including diagonals) |
 | `R` | Reset capture box to configured default size (`500×500`) |
-| `S` | Toggle proportional corner drag lock |
+| `S` | Toggle proportional corner lock on or off |
 | `Esc` or Right-click | Cancel overlay without capturing |
 
 > **Game Capture Tip:** When capturing from full-screen games, set the game's display mode to **Borderless Fullscreen** (or **Windowed**) so the Windows overlay can draw over the game window.

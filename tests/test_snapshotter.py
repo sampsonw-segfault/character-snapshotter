@@ -65,7 +65,7 @@ def test_config_defaults_roundtrip_and_fallback(tmp_path: Path) -> None:
     assert default_cfg.default_height == 500
     assert default_cfg.box_width == 500
     assert default_cfg.box_height == 500
-    assert default_cfg.square_lock is True
+    assert default_cfg.square_lock is False
     assert default_cfg.scale == pytest.approx(1.0)
     assert default_cfg.capture_mode == CaptureMode.BOX.value
 
@@ -79,7 +79,7 @@ def test_config_defaults_roundtrip_and_fallback(tmp_path: Path) -> None:
         box_y=250,
         box_width=12345,
         box_height=99999,
-        square_lock=False,
+        square_lock=True,
         scale=0.71,
         overlay_opacity=0.6,
         play_chime=False,
@@ -264,18 +264,30 @@ def test_resize_box_edges_and_proportional_corners_with_negative_bounds() -> Non
     assert clamped_rect == PhysicalRect(100, 990, 900, 450)
     assert clamped_rect.bottom == bounds.bottom
 
-    # Free corner resize (square_lock=False / Shift held) changes both axes independently
-    free = resize_box(
-        start_rect=start,
-        handle="se",
-        cur_px=300,
-        cur_py=150,
-        start_px=100,
-        start_py=100,
-        square_lock=False,
-        bounds=bounds,
-    )
-    assert free == PhysicalRect(start.x, start.y, 700, 550)
+    # Free corner resize (default square_lock=False) tracks mouse pointer on both axes for all 4 corners
+    for handle in ("nw", "ne", "se", "sw"):
+        dx = -200 if "w" in handle else 200
+        dy = -50 if "n" in handle else 50
+        free_rect = resize_box(
+            start_rect=start,
+            handle=handle,
+            cur_px=100 + dx,
+            cur_py=100 + dy,
+            start_px=100,
+            start_py=100,
+            square_lock=False,
+            bounds=bounds,
+        )
+        assert free_rect.width == 700
+        assert free_rect.height == 550
+        if handle == "se":
+            assert (free_rect.x, free_rect.y) == (start.x, start.y)
+        elif handle == "nw":
+            assert (free_rect.right, free_rect.bottom) == (start.right, start.bottom)
+        elif handle == "ne":
+            assert (free_rect.x, free_rect.bottom) == (start.x, start.bottom)
+        elif handle == "sw":
+            assert (free_rect.right, free_rect.y) == (start.right, start.y)
 
     # Clamping against extreme drag past negative virtual left boundary preserves 1:1
     clamped = resize_box(
@@ -462,7 +474,7 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         box_y=100,
         box_width=500,
         box_height=500,
-        square_lock=True,
+        square_lock=False,
         scale=1.0,
     )
     controller = OverlayController()
@@ -580,7 +592,7 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         assert dlg.hotkey_recorder.current_hotkey() == "Win+Alt+S"
         assert dlg.default_w_spin.value() == 500
         assert dlg.scale_spin.value() == pytest.approx(1.0)
-        assert dlg.square_lock_cb.isChecked() is True
+        assert dlg.square_lock_cb.isChecked() is False
         dlg.close()
     finally:
         controller.close_overlay()

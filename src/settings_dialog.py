@@ -315,7 +315,7 @@ class SettingsDialog(QDialog):
         form.addRow("Default Box Size:", box_row)
 
         self.square_lock_cb = QCheckBox(
-            "Scale corners proportionally by default (hold Shift while dragging a corner to resize freely)",
+            "Lock corner aspect ratio by default (hold Shift while dragging a corner to invert)",
             self,
         )
         form.addRow("Corner Resize:", self.square_lock_cb)

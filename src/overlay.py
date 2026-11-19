@@ -370,7 +370,7 @@ class OverlayController(QObject):
         self._box_rect = PhysicalRect(0, 0, 500, 500)
         self._default_w = 500
         self._default_h = 500
-        self._square_lock = True
+        self._square_lock = False
         self._scale = DEFAULT_SCALE
         self._opacity = 0.45
 

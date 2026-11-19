@@ -180,7 +180,7 @@ class SnapshotterApp(QObject):
         if ok:
             self._tray.showMessage(
                 "Character Snapshotter",
-                f"Running in the system tray. Press {self._config.hotkey} to open the capture box.",
+                f"Running in the system tray. Press {self._config.hotkey} to frame a pixel-perfect snapshot.",
                 QSystemTrayIcon.Information,
                 3500,
             )
