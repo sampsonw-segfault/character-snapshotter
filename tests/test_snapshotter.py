@@ -28,7 +28,8 @@ from src.config import AppConfig, CaptureMode, load_config, save_config
 from src.geometry import (
     PhysicalRect,
     ScreenMapping,
-    compute_proportional_output_size,
+    compute_arrow_direction,
+    compute_scaled_output_size,
     compute_virtual_bounds,
     ensure_dpi_awareness,
     enumerate_win32_monitors,
@@ -65,7 +66,7 @@ def test_config_defaults_roundtrip_and_fallback(tmp_path: Path) -> None:
     assert default_cfg.box_width == 500
     assert default_cfg.box_height == 500
     assert default_cfg.square_lock is True
-    assert default_cfg.scale_enabled is False
+    assert default_cfg.scale == pytest.approx(1.0)
     assert default_cfg.capture_mode == CaptureMode.BOX.value
 
     custom_cfg = AppConfig(
@@ -79,9 +80,7 @@ def test_config_defaults_roundtrip_and_fallback(tmp_path: Path) -> None:
         box_width=700,
         box_height=700,
         square_lock=False,
-        scale_enabled=True,
-        scale_anchor_axis="height",
-        scale_target_px=500,
+        scale=0.7143,
         overlay_opacity=0.6,
         play_chime=False,
     )
@@ -94,43 +93,68 @@ def test_config_defaults_roundtrip_and_fallback(tmp_path: Path) -> None:
     fallback = load_config(cfg_path)
     assert fallback.hotkey == "Win+Alt+S"
     assert fallback.box_width == 500
+    assert fallback.scale == pytest.approx(1.0)
 
-    # Unknown fields and out-of-range numeric values are handled safely
+    # Unknown fields (including legacy scale keys) and out-of-range numeric values are handled safely
     cfg_path.write_text(
-        '{"unknown_key": 123, "box_width": 2, "overlay_opacity": 0.99, "scale_anchor_axis": "diagonal"}',
+        '{"unknown_key": 123, "scale_enabled": true, "box_width": 2, "overlay_opacity": 0.99, "scale": 25.0}',
         encoding="utf-8",
     )
     sanitized = load_config(cfg_path)
     assert sanitized.box_width == 16
     assert sanitized.overlay_opacity == pytest.approx(0.85)
-    assert sanitized.scale_anchor_axis == "width"
+    assert sanitized.scale == pytest.approx(10.0)
+
+    cfg_path.write_text('{"scale": 0.001}', encoding="utf-8")
+    assert load_config(cfg_path).scale == pytest.approx(0.05)
 
 
 @pytest.mark.parametrize(
-    ("cap_w", "cap_h", "scale_enabled", "axis", "target", "expected"),
+    ("cap_w", "cap_h", "scale", "expected"),
     [
-        (700, 700, True, "width", 500, (500, 500)),
-        (350, 350, True, "width", 500, (500, 500)),
-        (800, 400, True, "width", 500, (500, 250)),
-        (800, 400, True, "height", 300, (600, 300)),
-        (720, 480, False, "width", 500, (720, 480)),
+        (500, 500, 1.0, (500, 500)),
+        (700, 700, 0.7143, (500, 500)),
+        (350, 350, 1.4286, (500, 500)),
+        (800, 400, 0.5, (400, 200)),
+        (300, 200, 2.0, (600, 400)),
     ],
 )
-def test_proportional_scaling_no_warping(
+def test_uniform_float_scaling_no_warping(
     cap_w: int,
     cap_h: int,
-    scale_enabled: bool,
-    axis: str,
-    target: int,
+    scale: float,
     expected: tuple[int, int],
 ) -> None:
-    out_w, out_h = compute_proportional_output_size(cap_w, cap_h, scale_enabled, axis, target)
+    out_w, out_h = compute_scaled_output_size(cap_w, cap_h, scale)
     assert (out_w, out_h) == expected
 
-    # Verify aspect ratio is preserved within 1px rounding tolerance
     src_ratio = cap_w / cap_h
     out_ratio = out_w / out_h
     assert abs(out_ratio - src_ratio) <= (1.0 / min(out_w, out_h)) + 1e-6
+
+
+@pytest.mark.parametrize(
+    ("held", "expected"),
+    [
+        (set(), (0, 0)),
+        ({"left"}, (-1, 0)),
+        ({"right"}, (1, 0)),
+        ({"up"}, (0, -1)),
+        ({"down"}, (0, 1)),
+        ({"up", "left"}, (-1, -1)),
+        ({"up", "right"}, (1, -1)),
+        ({"down", "left"}, (-1, 1)),
+        ({"down", "right"}, (1, 1)),
+        ({"up", "down"}, (0, 0)),
+        ({"left", "right"}, (0, 0)),
+        ({"up", "down", "left", "right"}, (0, 0)),
+        ({"up", "down", "left"}, (-1, 0)),
+    ],
+)
+def test_compute_arrow_direction_chords_and_cancellations(
+    held: set[str], expected: tuple[int, int]
+) -> None:
+    assert compute_arrow_direction(held) == expected
 
 
 def test_negative_origin_hidpi_screen_mapping_roundtrip() -> None:
@@ -249,7 +273,7 @@ def test_timestamp_path_and_image_processing(tmp_path: Path) -> None:
 
     # RGB downscale
     src_rgb = Image.new("RGB", (700, 700), (120, 80, 40))
-    scaled_rgb = process_captured_image(src_rgb, scale_enabled=True, anchor_axis="width", target_px=500)
+    scaled_rgb = process_captured_image(src_rgb, scale=0.7143)
     assert scaled_rgb.mode == "RGB"
     assert scaled_rgb.size == (500, 500)
 
@@ -259,15 +283,13 @@ def test_timestamp_path_and_image_processing(tmp_path: Path) -> None:
     src_rect = Image.new("RGB", (800, 400), (200, 150, 100))
     scaled_rgba = process_captured_image(
         src_rect,
-        scale_enabled=True,
-        anchor_axis="width",
-        target_px=500,
+        scale=0.5,
         alpha_mask=mask,
     )
     assert scaled_rgba.mode == "RGBA"
-    assert scaled_rgba.size == (500, 250)
+    assert scaled_rgba.size == (400, 200)
     assert scaled_rgba.getpixel((0, 0))[3] == 0
-    assert scaled_rgba.getpixel((250, 125))[3] == 255
+    assert scaled_rgba.getpixel((200, 100))[3] == 255
 
 
 class _FakeMSS:
@@ -298,7 +320,7 @@ def test_capture_region_to_file_coords_bgra_and_scaling(
         rect=PhysicalRect(0, 0, 100, 100),
         output_dir=tmp_path,
         prefix="primary_",
-        scale_enabled=False,
+        scale=1.0,
     )
     assert _FakeMSS.grabbed_monitors[-1] == {"left": 0, "top": 0, "width": 100, "height": 100}
     assert p_primary.exists()
@@ -311,9 +333,7 @@ def test_capture_region_to_file_coords_bgra_and_scaling(
         rect=PhysicalRect(-500, 100, 200, 200),
         output_dir=tmp_path,
         prefix="neg_",
-        scale_enabled=True,
-        anchor_axis="width",
-        target_px=500,
+        scale=2.5,
     )
     assert _FakeMSS.grabbed_monitors[-1] == {"left": -500, "top": 100, "width": 200, "height": 200}
     assert p_neg.exists()
@@ -332,7 +352,7 @@ def test_live_desktop_capture_if_unlocked(tmp_path: Path) -> None:
         rect=PhysicalRect(0, 0, 100, 100),
         output_dir=tmp_path,
         prefix="live_primary_",
-        scale_enabled=False,
+        scale=1.0,
     )
     assert p_primary.exists()
     with Image.open(p_primary) as img:
@@ -345,9 +365,7 @@ def test_live_desktop_capture_if_unlocked(tmp_path: Path) -> None:
             rect=neg_rect,
             output_dir=tmp_path,
             prefix="live_neg_",
-            scale_enabled=True,
-            anchor_axis="width",
-            target_px=500,
+            scale=2.5,
         )
         assert p_neg.exists()
         with Image.open(p_neg) as img:
@@ -381,9 +399,16 @@ def test_live_win32_global_hotkey_dispatch(qapp: QApplication) -> None:
     manager.triggered.connect(lambda: hits.append(1))
 
     try:
-        ok, err = manager.register("Win+Alt+S")
-        assert ok, f"Unexpected hotkey failure: {err}"
-        assert manager.current_hotkey == "Win+Alt+S"
+        chosen = None
+        last_err = ""
+        for candidate in ("Win+Alt+S", "Ctrl+Alt+Shift+F12", "Ctrl+Alt+Shift+F11"):
+            ok, err = manager.register(candidate)
+            if ok:
+                chosen = candidate
+                break
+            last_err = err
+        assert chosen is not None, f"Unexpected hotkey failure: {last_err}"
+        assert manager.current_hotkey == chosen
 
         ctypes.windll.user32.PostMessageW(manager.host_hwnd, WM_HOTKEY, 0x4353, 0)
         qapp.processEvents()
@@ -400,8 +425,7 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         box_width=500,
         box_height=500,
         square_lock=True,
-        scale_enabled=False,
-        scale_target_px=500,
+        scale=1.0,
     )
     controller = OverlayController()
     try:
@@ -415,31 +439,65 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
 
         hud = controller.hud_widget
         assert hud.isVisible()
+        assert not hasattr(hud, "reset_btn")
+        assert not hasattr(hud, "square_btn")
+        assert hud.cap_w_spin.value() == 500
+        assert hud.cap_h_spin.value() == 500
+        assert hud.scale_spin.value() == pytest.approx(1.0)
+        assert hud.scale_spin.textFromValue(1.0) == "1"
 
-        # Simulate changing capture width to 700 in 1:1 locked mode
-        hud.cap_w_spin.setValue(700)
-        qapp.processEvents()
-        assert controller.box_rect.width == 700
-        assert controller.box_rect.height == 700
-
-        # Unlock square, set rect 800x400, enable proportional scaling to width 500 -> 500x250
-        hud.square_btn.setChecked(False)
+        # Editing capture width and height updates box dimensions independently and live
         hud.cap_w_spin.setValue(800)
         hud.cap_h_spin.setValue(400)
-        hud.scale_checkbox.setChecked(True)
-        hud.out_w_spin.setValue(500)
         qapp.processEvents()
-
         assert controller.box_rect.width == 800
         assert controller.box_rect.height == 400
-        assert hud.out_w_spin.value() == 500
-        assert hud.out_h_spin.value() == 250
+        assert hud.cap_w_spin.value() == 800
+        assert hud.cap_h_spin.value() == 400
 
-        # Reset back to 500x500 via R key simulation / reset button
-        hud.reset_btn.click()
+        # Editing float scale multiplier updates controller.scale
+        hud.scale_spin.setValue(0.5)
         qapp.processEvents()
-        assert controller.box_rect.width == 500
-        assert controller.box_rect.height == 500
+        assert controller.scale == pytest.approx(0.5)
+
+        # Box resize/nudge keeps HUD input fields synced to live capture dimensions
+        controller.set_box_rect(PhysicalRect(150, 150, 650, 650))
+        qapp.processEvents()
+        assert hud.cap_w_spin.value() == 650
+        assert hud.cap_h_spin.value() == 650
+
+        # Multi-key diagonal movement & opposite-direction cancellation
+        start_rect = controller.box_rect
+        controller.on_arrow_pressed("up", shift_held=False)
+        controller.on_arrow_pressed("left", shift_held=False)
+        qapp.processEvents()
+        # First press ("up") moved (0, -1), second press with both held moved (-1, -1) => net (-1, -2)
+        assert controller.box_rect.x == start_rect.x - 1
+        assert controller.box_rect.y == start_rect.y - 2
+
+        # Holding opposing "down" while "up" & "left" are held cancels vertical movement => only left
+        before_cancel = controller.box_rect
+        controller.on_arrow_pressed("down", shift_held=False)
+        qapp.processEvents()
+        assert controller.box_rect.x == before_cancel.x - 1
+        assert controller.box_rect.y == before_cancel.y
+
+        # Holding both "up" + "down" (no left/right) moves nothing
+        controller.on_arrow_released("left")
+        before_noop = controller.box_rect
+        controller._apply_held_nudge(shift_override=False)
+        qapp.processEvents()
+        assert controller.box_rect == before_noop
+        controller.clear_held_arrows()
+
+        # Shift + diagonal chord moves 10px per axis
+        before_shift = controller.box_rect
+        controller.on_arrow_pressed("up", shift_held=True)
+        controller.on_arrow_pressed("left", shift_held=True)
+        qapp.processEvents()
+        assert controller.box_rect.x == before_shift.x - 10
+        assert controller.box_rect.y == before_shift.y - 20
+        controller.clear_held_arrows()
 
         # Verify hide_for_capture hides all widgets cleanly before callback
         called: list[bool] = []
@@ -453,7 +511,8 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         dlg = SettingsDialog(cfg)
         assert dlg.hotkey_recorder.current_hotkey() == "Win+Alt+S"
         assert dlg.default_w_spin.value() == 500
-        assert dlg.scale_target_spin.value() == 500
+        assert dlg.scale_spin.value() == pytest.approx(1.0)
+        assert dlg.square_lock_cb.isChecked() is True
         dlg.close()
     finally:
         controller.close_overlay()
@@ -476,8 +535,7 @@ def test_two_tap_snapshotter_app_flow(
         box_y=50,
         box_width=350,
         box_height=350,
-        scale_enabled=True,
-        scale_target_px=500,
+        scale=1.4286,
         play_chime=False,
     )
     app_ctrl = SnapshotterApp(config=cfg)

@@ -73,8 +73,7 @@ def bridge_app(
         box_width=500,
         box_height=500,
         square_lock=True,
-        scale_enabled=False,
-        scale_target_px=500,
+        scale=1.0,
         play_chime=False,
         bridge_enabled=True,
         bridge_port=0,
@@ -176,7 +175,7 @@ def test_bridge_options_preflight_and_rejects_untrusted_origin(
     def _evil_post() -> int:
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/config",
-            data=b'{"scale_enabled": true}',
+            data=b'{"scale": 0.5}',
             headers={
                 "Origin": "https://evil.example.com",
                 "Content-Type": "application/json",
@@ -201,8 +200,7 @@ def test_bridge_post_config_mutates_and_persists(
     def _patch() -> dict[str, object]:
         payload = json.dumps(
             {
-                "scale_enabled": True,
-                "scale_target_px": 500,
+                "scale": 0.5,
                 "box_width": 700,
                 "box_height": 700,
                 "square_lock": False,
@@ -223,8 +221,7 @@ def test_bridge_post_config_mutates_and_persists(
 
     res = _run_with_qt(qapp, _patch)
     assert res["ok"] is True
-    assert app_ctrl.config.scale_enabled is True
-    assert app_ctrl.config.scale_target_px == 500
+    assert app_ctrl.config.scale == pytest.approx(0.5)
     assert app_ctrl.config.box_width == 700
     assert app_ctrl.config.box_height == 700
     assert app_ctrl.config.square_lock is False

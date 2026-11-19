@@ -10,7 +10,7 @@ from pathlib import Path
 import mss
 from PIL import Image
 
-from src.geometry import PhysicalRect, compute_proportional_output_size
+from src.geometry import PhysicalRect, compute_scaled_output_size
 
 
 def _sanitize_prefix(prefix: str) -> str:
@@ -39,12 +39,10 @@ def generate_timestamp_path(
 
 def process_captured_image(
     img: Image.Image,
-    scale_enabled: bool,
-    anchor_axis: str,
-    target_px: int,
+    scale: float = 1.0,
     alpha_mask: Image.Image | None = None,
 ) -> Image.Image:
-    """Apply optional alpha mask and strictly proportional Lanczos scaling."""
+    """Apply optional alpha mask and uniform float Lanczos scaling."""
     if alpha_mask is not None:
         prepared = img.convert("RGBA")
         mask = alpha_mask.convert("L")
@@ -54,12 +52,10 @@ def process_captured_image(
     else:
         prepared = img.convert("RGB")
 
-    out_w, out_h = compute_proportional_output_size(
+    out_w, out_h = compute_scaled_output_size(
         prepared.width,
         prepared.height,
-        scale_enabled=scale_enabled,
-        anchor_axis=anchor_axis,
-        target_px=target_px,
+        scale=scale,
     )
     if (out_w, out_h) != prepared.size:
         prepared = prepared.resize((out_w, out_h), Image.Resampling.LANCZOS)
@@ -70,9 +66,7 @@ def capture_region_to_file(
     rect: PhysicalRect,
     output_dir: Path,
     prefix: str = "capture_",
-    scale_enabled: bool = False,
-    anchor_axis: str = "width",
-    target_px: int = 500,
+    scale: float = 1.0,
     alpha_mask: Image.Image | None = None,
 ) -> Path:
     """Grab physical screen pixels in rect, process them, and save a timestamped PNG."""
@@ -88,9 +82,7 @@ def capture_region_to_file(
     raw_img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
     final_img = process_captured_image(
         raw_img,
-        scale_enabled=scale_enabled,
-        anchor_axis=anchor_axis,
-        target_px=target_px,
+        scale=scale,
         alpha_mask=alpha_mask,
     )
     out_path = generate_timestamp_path(output_dir, prefix=prefix)

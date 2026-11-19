@@ -212,28 +212,21 @@ def clamp_box_to_monitors(
     return clamped.clamped_to(nearest, min_size=min_size)
 
 
-def compute_proportional_output_size(
-    cap_w: int,
-    cap_h: int,
-    scale_enabled: bool,
-    anchor_axis: str,
-    target_px: int,
-) -> tuple[int, int]:
-    """Compute strictly proportional output dimensions without ever distorting aspect ratio."""
+def compute_scaled_output_size(cap_w: int, cap_h: int, scale: float) -> tuple[int, int]:
+    """Scale both capture dimensions uniformly by a float multiplier without distortion."""
     safe_w = max(1, int(cap_w))
     safe_h = max(1, int(cap_h))
-    if not scale_enabled:
+    safe_scale = max(0.05, min(10.0, float(scale)))
+    if abs(safe_scale - 1.0) < 1e-6:
         return (safe_w, safe_h)
+    return (max(1, round(safe_w * safe_scale)), max(1, round(safe_h * safe_scale)))
 
-    safe_target = max(1, int(target_px))
-    if anchor_axis == "height":
-        out_h = safe_target
-        out_w = max(1, round(out_h * (safe_w / safe_h)))
-        return (out_w, out_h)
 
-    out_w = safe_target
-    out_h = max(1, round(out_w * (safe_h / safe_w)))
-    return (out_w, out_h)
+def compute_arrow_direction(held_directions: set[str]) -> tuple[int, int]:
+    """Resolve simultaneous directional keys into a net (dx, dy) step in {-1, 0, 1}."""
+    dx = (1 if "right" in held_directions else 0) - (1 if "left" in held_directions else 0)
+    dy = (1 if "down" in held_directions else 0) - (1 if "up" in held_directions else 0)
+    return (dx, dy)
 
 
 def _clamp(value: int, minimum: int, maximum: int) -> int:

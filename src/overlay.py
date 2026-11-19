@@ -8,13 +8,14 @@ from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPen, QScreen
 from PySide6.QtWidgets import QApplication, QWidget
 
-from src.config import AppConfig
+from src.config import DEFAULT_SCALE, MAX_SCALE, MIN_SCALE, AppConfig
 from src.geometry import (
     DEFAULT_MIN_SIZE,
     PhysicalRect,
     ScreenMapping,
     centered_rect_in,
     clamp_box_to_monitors,
+    compute_arrow_direction,
     compute_virtual_bounds,
     enumerate_win32_monitors,
     find_monitor_for_point,
@@ -39,6 +40,13 @@ _HANDLE_CURSORS: dict[str, Qt.CursorShape] = {
 }
 _HANDLE_HIT_RADIUS = 8.0
 _HANDLE_DRAW_HALF = 4.0
+
+_ARROW_KEY_TO_DIR: dict[int, str] = {
+    int(Qt.Key_Left): "left",
+    int(Qt.Key_Right): "right",
+    int(Qt.Key_Up): "up",
+    int(Qt.Key_Down): "down",
+}
 
 
 def build_screen_mappings() -> list[tuple[QScreen, ScreenMapping]]:
@@ -278,34 +286,47 @@ class ScreenOverlayWidget(QWidget):
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        key = event.key()
-        if key == Qt.Key_Escape:
+        key = int(event.key())
+        if key == int(Qt.Key_Escape):
             self._controller.cancel()
             event.accept()
             return
-        if key == Qt.Key_R:
+        if key == int(Qt.Key_R):
             self._controller.reset_box_to_default()
             event.accept()
             return
-        if key == Qt.Key_S:
+        if key == int(Qt.Key_S):
             self._controller.toggle_square_lock()
             event.accept()
             return
 
-        step = 10 if (event.modifiers() & Qt.ShiftModifier) else 1
-        nudges: dict[int, tuple[int, int]] = {
-            Qt.Key_Left: (-step, 0),
-            Qt.Key_Right: (step, 0),
-            Qt.Key_Up: (0, -step),
-            Qt.Key_Down: (0, step),
-        }
-        if key in nudges:
-            dx, dy = nudges[key]
-            self._controller.nudge_box(dx, dy)
+        if key in _ARROW_KEY_TO_DIR:
+            if event.isAutoRepeat():
+                event.accept()
+                return
+            self._controller.on_arrow_pressed(
+                _ARROW_KEY_TO_DIR[key],
+                bool(event.modifiers() & Qt.ShiftModifier),
+            )
             event.accept()
             return
 
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:
+        key = int(event.key())
+        if key in _ARROW_KEY_TO_DIR:
+            if event.isAutoRepeat():
+                event.accept()
+                return
+            self._controller.on_arrow_released(_ARROW_KEY_TO_DIR[key])
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    def focusOutEvent(self, event: object) -> None:
+        self._controller.clear_held_arrows()
+        super().focusOutEvent(event)  # type: ignore[arg-type]
 
 
 class OverlayController(QObject):
@@ -328,17 +349,22 @@ class OverlayController(QObject):
         self._default_w = 500
         self._default_h = 500
         self._square_lock = True
-        self._scale_enabled = False
-        self._scale_anchor_axis = "width"
-        self._scale_target_px = 500
+        self._scale = DEFAULT_SCALE
         self._opacity = 0.45
+
+        self._held_directions: set[str] = set()
+        self._nudge_delay_timer = QTimer(self)
+        self._nudge_delay_timer.setSingleShot(True)
+        self._nudge_delay_timer.setInterval(180)
+        self._nudge_delay_timer.timeout.connect(self._start_nudge_repeat)
+
+        self._nudge_repeat_timer = QTimer(self)
+        self._nudge_repeat_timer.setInterval(25)
+        self._nudge_repeat_timer.timeout.connect(self._apply_held_nudge)
 
         self._hud = FloatingHudWidget()
         self._hud.capture_size_edited.connect(self._on_hud_capture_size_edited)
-        self._hud.reset_clicked.connect(self.reset_box_to_default)
-        self._hud.square_lock_toggled.connect(self.set_square_lock)
-        self._hud.scale_toggled.connect(self.set_scale_enabled)
-        self._hud.output_size_edited.connect(self._on_hud_output_size_edited)
+        self._hud.scale_edited.connect(self._on_hud_scale_edited)
         self._hud.settings_clicked.connect(self._on_hud_settings_clicked)
         self._hud.cancel_clicked.connect(self.cancel)
 
@@ -367,16 +393,8 @@ class OverlayController(QObject):
         return self._square_lock
 
     @property
-    def scale_enabled(self) -> bool:
-        return self._scale_enabled
-
-    @property
-    def scale_anchor_axis(self) -> str:
-        return self._scale_anchor_axis
-
-    @property
-    def scale_target_px(self) -> int:
-        return self._scale_target_px
+    def scale(self) -> float:
+        return self._scale
 
     @property
     def opacity(self) -> float:
@@ -392,15 +410,14 @@ class OverlayController(QObject):
 
     def show_overlay(self, config: AppConfig) -> None:
         """Build fresh monitor mappings, restore box & settings from config, and show overlay."""
+        self.clear_held_arrows()
         self._teardown_overlays()
         self._capturing = False
 
         self._default_w = config.default_width
         self._default_h = config.default_height
         self._square_lock = config.square_lock
-        self._scale_enabled = config.scale_enabled
-        self._scale_anchor_axis = config.scale_anchor_axis
-        self._scale_target_px = config.scale_target_px
+        self._scale = config.scale
         self._opacity = config.overlay_opacity
 
         self._screen_pairs = build_screen_mappings()
@@ -463,6 +480,43 @@ class OverlayController(QObject):
         moved = clamp_box_to_monitors(self._box_rect.translated(dx, dy), self._monitor_rects)
         self.set_box_rect(moved)
 
+    def on_arrow_pressed(self, direction: str, shift_held: bool) -> None:
+        """Track a pressed arrow key and nudge immediately (supporting diagonal chords)."""
+        self._held_directions.add(direction)
+        self._apply_held_nudge(shift_override=shift_held)
+        if not self._nudge_repeat_timer.isActive():
+            self._nudge_delay_timer.start()
+
+    def on_arrow_released(self, direction: str) -> None:
+        """Stop tracking a released arrow key and halt repeat timers if none remain held."""
+        self._held_directions.discard(direction)
+        if not self._held_directions:
+            self._nudge_delay_timer.stop()
+            self._nudge_repeat_timer.stop()
+
+    def clear_held_arrows(self) -> None:
+        """Clear all tracked directional keys and stop repeat timers."""
+        self._held_directions.clear()
+        self._nudge_delay_timer.stop()
+        self._nudge_repeat_timer.stop()
+
+    def _start_nudge_repeat(self) -> None:
+        if self._held_directions and self._active:
+            self._apply_held_nudge()
+            self._nudge_repeat_timer.start()
+
+    def _apply_held_nudge(self, shift_override: bool | None = None) -> None:
+        dx, dy = compute_arrow_direction(self._held_directions)
+        if dx == 0 and dy == 0:
+            return
+        shift = (
+            shift_override
+            if shift_override is not None
+            else bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
+        )
+        step = 10 if shift else 1
+        self.nudge_box(dx * step, dy * step)
+
     def reset_box_to_default(self) -> None:
         w = self._default_w
         h = self._default_h
@@ -483,34 +537,20 @@ class OverlayController(QObject):
         self._position_hud()
         self.state_changed.emit()
 
-    def set_scale_enabled(self, enabled: bool) -> None:
-        self._scale_enabled = bool(enabled)
-        self._sync_hud()
-        self._position_hud()
-        self.state_changed.emit()
-
     def _on_hud_capture_size_edited(self, width: int, height: int) -> None:
         target_w = max(DEFAULT_MIN_SIZE, int(width))
         target_h = max(DEFAULT_MIN_SIZE, int(height))
-        if self._square_lock:
-            side = target_w if target_w != self._box_rect.width else target_h
-            target_w = side
-            target_h = side
         x = self._box_rect.center_x - target_w // 2
         y = self._box_rect.center_y - target_h // 2
         resized = clamp_box_to_monitors(
             PhysicalRect(x, y, target_w, target_h),
             self._monitor_rects,
         )
-        if self._square_lock and resized.width != resized.height:
-            resized = snap_rect_to_square(resized, self._virtual_bounds)
         self.set_box_rect(resized)
 
-    def _on_hud_output_size_edited(self, axis: str, target_px: int) -> None:
-        self._scale_anchor_axis = "height" if axis == "height" else "width"
-        self._scale_target_px = max(DEFAULT_MIN_SIZE, int(target_px))
+    def _on_hud_scale_edited(self, scale: float) -> None:
+        self._scale = max(MIN_SCALE, min(MAX_SCALE, float(scale)))
         self._sync_hud()
-        self._position_hud()
         self.state_changed.emit()
 
     def _on_hud_settings_clicked(self) -> None:
@@ -530,31 +570,25 @@ class OverlayController(QObject):
         config.box_width = self._box_rect.width
         config.box_height = self._box_rect.height
         config.square_lock = self._square_lock
-        config.scale_enabled = self._scale_enabled
-        config.scale_anchor_axis = self._scale_anchor_axis
-        config.scale_target_px = self._scale_target_px
+        config.scale = self._scale
 
     def apply_config(self, config: AppConfig) -> None:
         """Push updated config settings into the currently visible overlay and HUD."""
         self._default_w = config.default_width
         self._default_h = config.default_height
         self._square_lock = config.square_lock
-        self._scale_enabled = config.scale_enabled
-        self._scale_anchor_axis = config.scale_anchor_axis
-        self._scale_target_px = config.scale_target_px
+        self._scale = config.scale
         self._opacity = config.overlay_opacity
 
         if self._active:
             target_w = max(DEFAULT_MIN_SIZE, config.box_width)
-            target_h = target_w if self._square_lock else max(DEFAULT_MIN_SIZE, config.box_height)
+            target_h = max(DEFAULT_MIN_SIZE, config.box_height)
             x = self._box_rect.center_x - target_w // 2
             y = self._box_rect.center_y - target_h // 2
             resized = clamp_box_to_monitors(
                 PhysicalRect(x, y, target_w, target_h),
                 self._monitor_rects,
             )
-            if self._square_lock and resized.width != resized.height:
-                resized = snap_rect_to_square(resized, self._virtual_bounds)
             self._box_rect = resized
             self.update_all_screens()
             self._sync_hud()
@@ -564,6 +598,7 @@ class OverlayController(QObject):
     def hide_for_capture(self, callback: Callable[[], None], delay_ms: int = 45) -> PhysicalRect:
         """Hide overlay + HUD immediately, flush events, and run callback after DWM settles."""
         self._capturing = True
+        self.clear_held_arrows()
         self._hud.commit_pending_edits()
         captured_rect = self._box_rect
 
@@ -586,6 +621,7 @@ class OverlayController(QObject):
 
     def close_overlay(self) -> None:
         """Hide and tear down all overlay windows and the HUD pill."""
+        self.clear_held_arrows()
         self._hud.commit_pending_edits()
         self._hud.hide()
         self._teardown_overlays()
@@ -606,12 +642,7 @@ class OverlayController(QObject):
         self._hud.sync_state(
             cap_w=self._box_rect.width,
             cap_h=self._box_rect.height,
-            default_w=self._default_w,
-            default_h=self._default_h,
-            square_lock=self._square_lock,
-            scale_enabled=self._scale_enabled,
-            anchor_axis=self._scale_anchor_axis,
-            target_px=self._scale_target_px,
+            scale=self._scale,
         )
 
     def _position_hud(self) -> None:

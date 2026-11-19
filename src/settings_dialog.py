@@ -14,6 +14,7 @@ from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -30,8 +31,10 @@ from src.config import (
     DEFAULT_HOTKEY,
     MAX_BOX_SIZE,
     MAX_BRIDGE_PORT,
+    MAX_SCALE,
     MIN_BOX_SIZE,
     MIN_BRIDGE_PORT,
+    MIN_SCALE,
     AppConfig,
 )
 from src.hotkey import (
@@ -311,18 +314,23 @@ class SettingsDialog(QDialog):
         box_row.addStretch(1)
         form.addRow("Default Box Size:", box_row)
 
+        self.square_lock_cb = QCheckBox(
+            "Lock drag handles to 1:1 square by default (hold Shift while dragging to invert)",
+            self,
+        )
+        form.addRow("Drag Aspect:", self.square_lock_cb)
+
         scale_row = QHBoxLayout()
         scale_row.setSpacing(8)
-        self.scale_enabled_cb = QCheckBox("Scale proportionally to", self)
-        self.scale_enabled_cb.toggled.connect(self._on_scale_toggled)
-        scale_row.addWidget(self.scale_enabled_cb)
-        self.scale_target_spin = QSpinBox(self)
-        self.scale_target_spin.setRange(MIN_BOX_SIZE, MAX_BOX_SIZE)
-        self.scale_target_spin.setFixedWidth(82)
-        scale_row.addWidget(self.scale_target_spin)
-        scale_row.addWidget(QLabel("px", self))
+        self.scale_spin = QDoubleSpinBox(self)
+        self.scale_spin.setRange(MIN_SCALE, MAX_SCALE)
+        self.scale_spin.setDecimals(4)
+        self.scale_spin.setSingleStep(0.1)
+        self.scale_spin.setFixedWidth(92)
+        scale_row.addWidget(self.scale_spin)
+        scale_row.addWidget(QLabel("× (scales both width & height)", self))
         scale_row.addStretch(1)
-        form.addRow("Output Scaling:", scale_row)
+        form.addRow("Output Scale:", scale_row)
 
         opacity_row = QHBoxLayout()
         opacity_row.setSpacing(10)
@@ -399,7 +407,7 @@ class SettingsDialog(QDialog):
                 padding: 8px 10px;
                 font-size: 12px;
             }
-            QLineEdit, QSpinBox {
+            QLineEdit, QSpinBox, QDoubleSpinBox {
                 background-color: #241F1A;
                 color: #F4EFE6;
                 border: 1px solid #4A4238;
@@ -407,10 +415,10 @@ class SettingsDialog(QDialog):
                 padding: 5px 8px;
                 font-size: 13px;
             }
-            QLineEdit:focus, QSpinBox:focus {
+            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
                 border-color: #DAA520;
             }
-            QSpinBox:disabled {
+            QSpinBox:disabled, QDoubleSpinBox:disabled {
                 color: #7D756B;
                 background-color: #1C1814;
             }
@@ -487,9 +495,8 @@ class SettingsDialog(QDialog):
         self.prefix_edit.setText(self._config.filename_prefix)
         self.default_w_spin.setValue(self._config.default_width)
         self.default_h_spin.setValue(self._config.default_height)
-        self.scale_enabled_cb.setChecked(self._config.scale_enabled)
-        self.scale_target_spin.setValue(self._config.scale_target_px)
-        self._on_scale_toggled(self._config.scale_enabled)
+        self.square_lock_cb.setChecked(self._config.square_lock)
+        self.scale_spin.setValue(self._config.scale)
         pct = round(self._config.overlay_opacity * 100)
         self.opacity_slider.setValue(max(10, min(85, pct)))
         self._update_opacity_label(self.opacity_slider.value())
@@ -498,9 +505,6 @@ class SettingsDialog(QDialog):
         self.bridge_port_spin.setValue(self._config.bridge_port)
         self._on_bridge_toggled(self._config.bridge_enabled)
         self._update_prefix_preview(self.prefix_edit.text())
-
-    def _on_scale_toggled(self, checked: bool) -> None:
-        self.scale_target_spin.setEnabled(checked)
 
     def _on_bridge_toggled(self, checked: bool) -> None:
         self.bridge_port_spin.setEnabled(checked)
@@ -555,8 +559,8 @@ class SettingsDialog(QDialog):
         self._config.filename_prefix = self.prefix_edit.text()
         self._config.default_width = self.default_w_spin.value()
         self._config.default_height = self.default_h_spin.value()
-        self._config.scale_enabled = self.scale_enabled_cb.isChecked()
-        self._config.scale_target_px = self.scale_target_spin.value()
+        self._config.square_lock = self.square_lock_cb.isChecked()
+        self._config.scale = round(float(self.scale_spin.value()), 4)
         self._config.overlay_opacity = round(self.opacity_slider.value() / 100.0, 2)
         self._config.play_chime = self.chime_cb.isChecked()
         self._config.bridge_enabled = self.bridge_enabled_cb.isChecked()

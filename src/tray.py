@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QSystemTrayIcon
 from src.bridge import BridgeCallbacks, LocalBridgeServer, config_to_bridge_dict
 from src.capture import capture_region_to_file, play_capture_chime
 from src.config import AppConfig, load_config, save_config, validate_config
-from src.geometry import compute_proportional_output_size
+from src.geometry import compute_scaled_output_size
 from src.hotkey import GlobalHotkeyManager
 from src.overlay import OverlayController
 from src.settings_dialog import SettingsDialog
@@ -31,9 +31,7 @@ _REMOTE_PATCHABLE_FIELDS = {
     "box_width",
     "box_height",
     "square_lock",
-    "scale_enabled",
-    "scale_anchor_axis",
-    "scale_target_px",
+    "scale",
     "overlay_opacity",
     "play_chime",
 }
@@ -250,9 +248,7 @@ class SnapshotterApp(QObject):
         save_config(self._config)
 
         rect = self._overlay.box_rect
-        scale_enabled = self._overlay.scale_enabled
-        anchor_axis = self._overlay.scale_anchor_axis
-        target_px = self._overlay.scale_target_px
+        scale = self._overlay.scale
         output_dir = Path(self._config.output_dir)
         prefix = self._config.filename_prefix
         play_chime = self._config.play_chime
@@ -263,9 +259,7 @@ class SnapshotterApp(QObject):
                     rect=rect,
                     output_dir=output_dir,
                     prefix=prefix,
-                    scale_enabled=scale_enabled,
-                    anchor_axis=anchor_axis,
-                    target_px=target_px,
+                    scale=scale,
                 )
                 if play_chime:
                     play_capture_chime()
@@ -273,12 +267,10 @@ class SnapshotterApp(QObject):
                     f"Character Snapshotter ({self._config.hotkey}) — Last: {out_path.name}"
                 )
                 if self._bridge.is_running:
-                    out_w, out_h = compute_proportional_output_size(
+                    out_w, out_h = compute_scaled_output_size(
                         rect.width,
                         rect.height,
-                        scale_enabled=scale_enabled,
-                        anchor_axis=anchor_axis,
-                        target_px=target_px,
+                        scale=scale,
                     )
                     self._bridge.record_capture(out_path, out_w, out_h)
                     self._bridge.broadcast_overlay_state(False)
@@ -340,13 +332,13 @@ class SnapshotterApp(QObject):
 
         candidate = validate_config(AppConfig(**raw_data))
 
-        if candidate.square_lock:
-            if "box_width" in patch and "box_height" not in patch:
-                candidate.box_height = candidate.box_width
-            elif "box_height" in patch and "box_width" not in patch:
-                candidate.box_width = candidate.box_height
-            elif candidate.box_width != candidate.box_height:
-                candidate.box_height = candidate.box_width
+        if (
+            patch.get("square_lock") is True
+            and "box_width" not in patch
+            and "box_height" not in patch
+            and candidate.box_width != candidate.box_height
+        ):
+            candidate.box_height = candidate.box_width
 
         self._config = candidate
         save_config(self._config)

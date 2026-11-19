@@ -13,6 +13,9 @@ MIN_BOX_SIZE = 16
 MAX_BOX_SIZE = 9999
 MIN_OPACITY = 0.10
 MAX_OPACITY = 0.85
+MIN_SCALE = 0.05
+MAX_SCALE = 10.0
+DEFAULT_SCALE = 1.0
 DEFAULT_HOTKEY = "Win+Alt+S"
 DEFAULT_BRIDGE_PORT = 47821
 MIN_BRIDGE_PORT = 1024
@@ -45,9 +48,7 @@ class AppConfig:
     box_width: int = 500
     box_height: int = 500
     square_lock: bool = True
-    scale_enabled: bool = False
-    scale_anchor_axis: str = "width"
-    scale_target_px: int = 500
+    scale: float = DEFAULT_SCALE
     overlay_opacity: float = 0.45
     play_chime: bool = True
     capture_mode: str = CaptureMode.BOX.value
@@ -103,8 +104,6 @@ def validate_config(cfg: AppConfig) -> AppConfig:
         str(cfg.filename_prefix) if isinstance(cfg.filename_prefix, str) else defaults.filename_prefix
     )
 
-    anchor_axis = cfg.scale_anchor_axis if cfg.scale_anchor_axis in ("width", "height") else "width"
-
     valid_modes = {mode.value for mode in CaptureMode}
     capture_mode = cfg.capture_mode if cfg.capture_mode in valid_modes else CaptureMode.BOX.value
 
@@ -119,9 +118,7 @@ def validate_config(cfg: AppConfig) -> AppConfig:
         box_width=_coerce_int(cfg.box_width, defaults.box_width, MIN_BOX_SIZE, MAX_BOX_SIZE),
         box_height=_coerce_int(cfg.box_height, defaults.box_height, MIN_BOX_SIZE, MAX_BOX_SIZE),
         square_lock=bool(cfg.square_lock),
-        scale_enabled=bool(cfg.scale_enabled),
-        scale_anchor_axis=anchor_axis,
-        scale_target_px=_coerce_int(cfg.scale_target_px, defaults.scale_target_px, MIN_BOX_SIZE, MAX_BOX_SIZE),
+        scale=_coerce_float(cfg.scale, defaults.scale, MIN_SCALE, MAX_SCALE),
         overlay_opacity=_coerce_float(cfg.overlay_opacity, defaults.overlay_opacity, MIN_OPACITY, MAX_OPACITY),
         play_chime=bool(cfg.play_chime),
         capture_mode=capture_mode,
