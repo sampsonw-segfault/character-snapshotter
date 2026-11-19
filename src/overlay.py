@@ -338,6 +338,7 @@ class ScreenOverlayWidget(QWidget):
 class OverlayController(QObject):
     """Coordinates multi-monitor overlay windows, the capture box, and the floating HUD pill."""
 
+    capture_requested = Signal()
     cancelled = Signal()
     settings_requested = Signal()
     state_changed = Signal()
@@ -369,6 +370,7 @@ class OverlayController(QObject):
         self._nudge_repeat_timer.timeout.connect(self._apply_held_nudge)
 
         self._hud = FloatingHudWidget()
+        self._hud.capture_clicked.connect(self.capture_requested)
         self._hud.capture_size_edited.connect(self._on_hud_capture_size_edited)
         self._hud.scale_edited.connect(self._on_hud_scale_edited)
         self._hud.settings_clicked.connect(self._on_hud_settings_clicked)

@@ -441,6 +441,10 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         assert hud.isVisible()
         assert not hasattr(hud, "reset_btn")
         assert not hasattr(hud, "square_btn")
+        assert hud.capture_btn.x() < hud.cap_w_spin.x()
+        for btn in (hud.capture_btn, hud.settings_btn, hud.cancel_btn):
+            assert btn.text() == ""
+            assert not btn.icon().isNull()
         assert hud.cap_w_spin.maximum() == 99999
         assert hud.cap_h_spin.maximum() == 99999
         assert hud.cap_w_spin.width() > hud.scale_spin.width()
@@ -646,6 +650,48 @@ def test_two_tap_snapshotter_app_flow(
             assert img.size == (500, 500)
         assert not app_ctrl.overlay_controller.is_active
         assert cfg_file.exists()
+    finally:
+        app_ctrl.shutdown()
+        qapp.processEvents()
+
+
+def test_hud_camera_button_triggers_capture_and_closes_overlay(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg_file = tmp_path / "app_config.json"
+    out_dir = tmp_path / "snapshots"
+    _FakeMSS.grabbed_monitors = []
+    monkeypatch.setattr("src.capture.mss.MSS", _FakeMSS)
+    monkeypatch.setattr("src.tray.save_config", lambda cfg: save_config(cfg, cfg_file))
+
+    cfg = AppConfig(
+        hotkey="Win+Alt+S",
+        output_dir=str(out_dir),
+        box_x=80,
+        box_y=80,
+        box_width=500,
+        box_height=500,
+        scale=1.00,
+        play_chime=False,
+    )
+    app_ctrl = SnapshotterApp(config=cfg, start_bridge=False)
+    try:
+        app_ctrl.on_hotkey_triggered()
+        qapp.processEvents()
+        assert app_ctrl.overlay_controller.is_active is True
+
+        app_ctrl.overlay_controller.hud_widget.capture_btn.click()
+        for _ in range(30):
+            qapp.processEvents()
+            if list(out_dir.glob("capture_*.png")) and not app_ctrl.overlay_controller.is_active:
+                break
+            ctypes.windll.kernel32.Sleep(20)
+
+        saved_files = list(out_dir.glob("capture_*.png"))
+        assert len(saved_files) == 1
+        with Image.open(saved_files[0]) as img:
+            assert img.size == (500, 500)
+        assert not app_ctrl.overlay_controller.is_active
     finally:
         app_ctrl.shutdown()
         qapp.processEvents()

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtCore import QByteArray, QSize, Qt, Signal
+from PySide6.QtGui import QIcon, QKeyEvent, QPainter, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFrame,
@@ -16,6 +17,45 @@ from PySide6.QtWidgets import (
 
 from src.config import MAX_BOX_SIZE, MAX_SCALE, MIN_BOX_SIZE, MIN_SCALE
 from src.geometry import compute_scaled_output_size
+
+
+_CAMERA_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFD97D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+  <circle cx="12" cy="13" r="3"/>
+</svg>
+"""
+
+_SETTINGS_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#EAE3D7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+  <circle cx="12" cy="12" r="3"/>
+</svg>
+"""
+
+_CLOSE_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#EAE3D7" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M18 6 6 18"/>
+  <path d="m6 6 12 12"/>
+</svg>
+"""
+
+
+def _svg_to_icon(svg_markup: str, logical_size: int = 15) -> QIcon:
+    """Rasterize an SVG into multi-DPI pixmaps for crisp rendering on Windows scaling."""
+    renderer = QSvgRenderer(QByteArray(svg_markup.strip().encode("utf-8")))
+    icon = QIcon()
+    for dpr in (1, 2, 3):
+        px_size = logical_size * dpr
+        pixmap = QPixmap(px_size, px_size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
+        renderer.render(painter)
+        painter.end()
+        pixmap.setDevicePixelRatio(float(dpr))
+        icon.addPixmap(pixmap)
+    return icon
 
 
 class _HudSpinBox(QSpinBox):
@@ -72,6 +112,7 @@ class _HudScaleSpinBox(QDoubleSpinBox):
 class FloatingHudWidget(QWidget):
     """Compact floating control bar positioned adjacent to the capture box."""
 
+    capture_clicked = Signal()
     capture_size_edited = Signal(int, int)
     scale_edited = Signal(float)
     settings_clicked = Signal()
@@ -104,6 +145,23 @@ class FloatingHudWidget(QWidget):
         layout = QHBoxLayout(self._pill)
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(6)
+
+        self.capture_btn = QPushButton("", self._pill)
+        self.capture_btn.setObjectName("HudCaptureButton")
+        self.capture_btn.setIcon(_svg_to_icon(_CAMERA_SVG, logical_size=15))
+        self.capture_btn.setIconSize(QSize(15, 15))
+        self.capture_btn.setFixedSize(28, 24)
+        self.capture_btn.setCursor(Qt.PointingHandCursor)
+        self.capture_btn.setToolTip("Capture snapshot")
+        self.capture_btn.clicked.connect(self.capture_clicked)
+        layout.addWidget(self.capture_btn)
+
+        sep_left = QFrame(self._pill)
+        sep_left.setObjectName("HudSeparator")
+        sep_left.setFrameShape(QFrame.VLine)
+        sep_left.setFixedWidth(1)
+        sep_left.setFixedHeight(20)
+        layout.addWidget(sep_left)
 
         self.cap_w_spin = _HudSpinBox(self._pill)
         self.cap_w_spin.setToolTip("Capture area width (physical px)")
@@ -145,19 +203,23 @@ class FloatingHudWidget(QWidget):
         sep2.setFixedHeight(20)
         layout.addWidget(sep2)
 
-        self.settings_btn = QPushButton("⚙", self._pill)
+        self.settings_btn = QPushButton("", self._pill)
         self.settings_btn.setObjectName("HudIconButton")
+        self.settings_btn.setIcon(_svg_to_icon(_SETTINGS_SVG, logical_size=14))
+        self.settings_btn.setIconSize(QSize(14, 14))
         self.settings_btn.setCursor(Qt.PointingHandCursor)
         self.settings_btn.setToolTip("Open Settings")
-        self.settings_btn.setFixedWidth(28)
+        self.settings_btn.setFixedSize(26, 24)
         self.settings_btn.clicked.connect(self.settings_clicked)
         layout.addWidget(self.settings_btn)
 
-        self.cancel_btn = QPushButton("✕", self._pill)
+        self.cancel_btn = QPushButton("", self._pill)
         self.cancel_btn.setObjectName("HudIconButton")
+        self.cancel_btn.setIcon(_svg_to_icon(_CLOSE_SVG, logical_size=14))
+        self.cancel_btn.setIconSize(QSize(14, 14))
         self.cancel_btn.setCursor(Qt.PointingHandCursor)
         self.cancel_btn.setToolTip("Cancel overlay (Esc)")
-        self.cancel_btn.setFixedWidth(28)
+        self.cancel_btn.setFixedSize(26, 24)
         self.cancel_btn.clicked.connect(self.cancel_clicked)
         layout.addWidget(self.cancel_btn)
 
@@ -194,12 +256,22 @@ class FloatingHudWidget(QWidget):
                 height: 0px;
                 border: none;
             }
+            QPushButton#HudCaptureButton {
+                background-color: #362B16;
+                border: 1px solid #DAA520;
+                border-radius: 5px;
+                padding: 0px;
+            }
+            QPushButton#HudCaptureButton:hover {
+                background-color: #49391B;
+                border-color: #FFD97D;
+            }
             QPushButton#HudIconButton {
                 background-color: #2A241E;
                 color: #F4EFE6;
                 border: 1px solid #4A4238;
                 border-radius: 5px;
-                padding: 3px 8px;
+                padding: 0px;
                 font-size: 12px;
                 font-weight: 600;
             }

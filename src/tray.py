@@ -99,6 +99,7 @@ class SnapshotterApp(QObject):
         self._state_broadcast_timer.timeout.connect(self._on_debounced_overlay_state_changed)
 
         self._hotkey_manager.triggered.connect(self.on_hotkey_triggered)
+        self._overlay.capture_requested.connect(self._on_overlay_capture_requested)
         self._overlay.cancelled.connect(self._on_overlay_cancelled)
         self._overlay.settings_requested.connect(self.open_settings)
         self._overlay.state_changed.connect(self._state_broadcast_timer.start)
@@ -240,6 +241,10 @@ class SnapshotterApp(QObject):
             return
 
         self._capture_active_overlay()
+
+    def _on_overlay_capture_requested(self) -> None:
+        if self._settings_dialog is None and self._overlay.is_active and not self._overlay.is_capturing:
+            self._capture_active_overlay()
 
     def _capture_active_overlay(self) -> None:
         self._state_broadcast_timer.stop()
