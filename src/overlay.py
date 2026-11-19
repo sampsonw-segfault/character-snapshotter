@@ -39,6 +39,7 @@ _HANDLE_CURSORS: dict[str, Qt.CursorShape] = {
     "move": Qt.SizeAllCursor,
 }
 _HANDLE_HIT_RADIUS = 8.0
+_EDGE_HIT_TOLERANCE = 6.0
 _HANDLE_DRAW_HALF = 4.0
 
 _ARROW_KEY_TO_DIR: dict[int, str] = {
@@ -154,12 +155,26 @@ class ScreenOverlayWidget(QWidget):
 
     def _hit_test(self, pos: QPointF) -> str | None:
         box = self._local_box_rect()
-        for handle_id, center in self._handle_centers(box).items():
+        centers = self._handle_centers(box)
+        for handle_id in ("nw", "ne", "se", "sw", "n", "s", "e", "w"):
+            center = centers[handle_id]
             if (
                 abs(pos.x() - center.x()) <= _HANDLE_HIT_RADIUS
                 and abs(pos.y() - center.y()) <= _HANDLE_HIT_RADIUS
             ):
                 return handle_id
+
+        if box.left() <= pos.x() <= box.right():
+            if abs(pos.y() - box.top()) <= _EDGE_HIT_TOLERANCE:
+                return "n"
+            if abs(pos.y() - box.bottom()) <= _EDGE_HIT_TOLERANCE:
+                return "s"
+        if box.top() <= pos.y() <= box.bottom():
+            if abs(pos.x() - box.left()) <= _EDGE_HIT_TOLERANCE:
+                return "w"
+            if abs(pos.x() - box.right()) <= _EDGE_HIT_TOLERANCE:
+                return "e"
+
         if box.contains(pos):
             return "move"
         return None
@@ -539,11 +554,6 @@ class OverlayController(QObject):
 
     def set_square_lock(self, locked: bool) -> None:
         self._square_lock = bool(locked)
-        if self._square_lock and self._box_rect.width != self._box_rect.height:
-            self._box_rect = snap_rect_to_square(self._box_rect, self._virtual_bounds)
-        self.update_all_screens()
-        self._sync_hud()
-        self._position_hud()
         self.state_changed.emit()
 
     def _on_hud_capture_size_edited(self, width: int, height: int) -> None:

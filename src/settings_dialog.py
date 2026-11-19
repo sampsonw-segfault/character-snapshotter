@@ -315,10 +315,10 @@ class SettingsDialog(QDialog):
         form.addRow("Default Box Size:", box_row)
 
         self.square_lock_cb = QCheckBox(
-            "Lock drag handles to 1:1 square by default (hold Shift while dragging to invert)",
+            "Scale corners proportionally by default (hold Shift while dragging a corner to resize freely)",
             self,
         )
-        form.addRow("Drag Aspect:", self.square_lock_cb)
+        form.addRow("Corner Resize:", self.square_lock_cb)
 
         scale_row = QHBoxLayout()
         scale_row.setSpacing(8)

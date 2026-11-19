@@ -244,11 +244,13 @@ def resize_box(
     bounds: PhysicalRect,
     min_size: int = DEFAULT_MIN_SIZE,
 ) -> PhysicalRect:
-    """Resize start_rect from one of 8 handles ('nw','n','ne','e','se','s','sw','w')."""
+    """Resize start_rect from any of 8 handles; edges always resize 1 axis, corners scale proportionally when locked."""
     dx = cur_px - start_px
     dy = cur_py - start_py
 
-    if not square_lock:
+    # Edge handles ('n', 's', 'e', 'w') always resize one dimension independently;
+    # corner handles resize freely when proportional lock is off.
+    if handle in ("n", "s", "e", "w") or not square_lock:
         left = start_rect.x
         top = start_rect.y
         right = start_rect.right
@@ -263,65 +265,35 @@ def resize_box(
             bottom = _clamp(start_rect.bottom + dy, start_rect.y + min_size, bounds.bottom)
         return PhysicalRect(left, top, right - left, bottom - top)
 
-    # Square-locked resize: corner handles pin the opposite corner;
-    # edge handles pin the opposite edge and grow/shrink symmetrically on the perpendicular axis.
-    if handle == "se":
-        ax, ay = start_rect.x, start_rect.y
-        raw = max(start_rect.width + dx, start_rect.height + dy)
-        max_side = min(bounds.right - ax, bounds.bottom - ay)
-        side = _clamp(raw, min_size, max(min_size, max_side))
-        return PhysicalRect(ax, ay, side, side)
+    if handle not in ("nw", "ne", "se", "sw"):
+        return start_rect
 
-    if handle == "nw":
-        ax, ay = start_rect.right, start_rect.bottom
-        raw = max(start_rect.width - dx, start_rect.height - dy)
-        max_side = min(ax - bounds.x, ay - bounds.y)
-        side = _clamp(raw, min_size, max(min_size, max_side))
-        return PhysicalRect(ax - side, ay - side, side, side)
+    # Proportional corner scaling: pin the opposite corner and preserve start_rect's aspect ratio.
+    ax = start_rect.right if "w" in handle else start_rect.x
+    ay = start_rect.bottom if "n" in handle else start_rect.y
+    raw_w = start_rect.width + (-dx if "w" in handle else dx)
+    raw_h = start_rect.height + (-dy if "n" in handle else dy)
+    max_w = ax - bounds.x if "w" in handle else bounds.right - ax
+    max_h = ay - bounds.y if "n" in handle else bounds.bottom - ay
 
-    if handle == "ne":
-        ax, ay = start_rect.x, start_rect.bottom
-        raw = max(start_rect.width + dx, start_rect.height - dy)
-        max_side = min(bounds.right - ax, ay - bounds.y)
-        side = _clamp(raw, min_size, max(min_size, max_side))
-        return PhysicalRect(ax, ay - side, side, side)
+    base_w = max(1, start_rect.width)
+    base_h = max(1, start_rect.height)
+    k_raw = max(raw_w / base_w, raw_h / base_h)
+    k_min = max(min_size / base_w, min_size / base_h)
+    k_max = min(max_w / base_w, max_h / base_h)
+    k = k_max if k_max < k_min else max(k_min, min(k_raw, k_max))
 
-    if handle == "sw":
-        ax, ay = start_rect.right, start_rect.y
-        raw = max(start_rect.width - dx, start_rect.height + dy)
-        max_side = min(ax - bounds.x, bounds.bottom - ay)
-        side = _clamp(raw, min_size, max(min_size, max_side))
-        return PhysicalRect(ax - side, ay, side, side)
+    if base_w == base_h:
+        side = _clamp(round(base_w * k), min_size, max(min_size, min(max_w, max_h)))
+        new_w = side
+        new_h = side
+    else:
+        new_w = _clamp(round(base_w * k), min_size, max(min_size, max_w))
+        new_h = _clamp(round(base_h * k), min_size, max(min_size, max_h))
 
-    if handle == "e":
-        ax = start_rect.x
-        max_side = min(bounds.right - ax, bounds.height)
-        side = _clamp(start_rect.width + dx, min_size, max(min_size, max_side))
-        top = _clamp(start_rect.center_y - side // 2, bounds.y, bounds.bottom - side)
-        return PhysicalRect(ax, top, side, side)
-
-    if handle == "w":
-        ax = start_rect.right
-        max_side = min(ax - bounds.x, bounds.height)
-        side = _clamp(start_rect.width - dx, min_size, max(min_size, max_side))
-        top = _clamp(start_rect.center_y - side // 2, bounds.y, bounds.bottom - side)
-        return PhysicalRect(ax - side, top, side, side)
-
-    if handle == "s":
-        ay = start_rect.y
-        max_side = min(bounds.bottom - ay, bounds.width)
-        side = _clamp(start_rect.height + dy, min_size, max(min_size, max_side))
-        left = _clamp(start_rect.center_x - side // 2, bounds.x, bounds.right - side)
-        return PhysicalRect(left, ay, side, side)
-
-    if handle == "n":
-        ay = start_rect.bottom
-        max_side = min(ay - bounds.y, bounds.width)
-        side = _clamp(start_rect.height - dy, min_size, max(min_size, max_side))
-        left = _clamp(start_rect.center_x - side // 2, bounds.x, bounds.right - side)
-        return PhysicalRect(left, ay - side, side, side)
-
-    return start_rect
+    new_x = ax - new_w if "w" in handle else ax
+    new_y = ay - new_h if "n" in handle else ay
+    return PhysicalRect(new_x, new_y, new_w, new_h)
 
 
 def snap_rect_to_square(

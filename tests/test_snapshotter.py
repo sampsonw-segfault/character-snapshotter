@@ -12,7 +12,7 @@ import mss
 import mss.exception
 import pytest
 from PIL import Image
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QApplication
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -177,7 +177,7 @@ def test_negative_origin_hidpi_screen_mapping_roundtrip() -> None:
     assert mapping.physical_to_qt_global(-1280, 720) == (-1536, 576)
 
 
-def test_resize_box_all_handles_square_and_rect_with_negative_bounds() -> None:
+def test_resize_box_edges_and_proportional_corners_with_negative_bounds() -> None:
     bounds = compute_virtual_bounds(
         [
             PhysicalRect(-2560, 0, 2560, 1440),
@@ -188,10 +188,10 @@ def test_resize_box_all_handles_square_and_rect_with_negative_bounds() -> None:
 
     start = PhysicalRect(-500, 300, 500, 500)
 
-    for handle in HANDLE_IDS:
-        # Drag outward by +120px along the active handle vector
-        dx = -120 if "w" in handle else (120 if "e" in handle else 0)
-        dy = -80 if "n" in handle else (80 if "s" in handle else 0)
+    # Corners scale proportionally (preserving 1:1 on a square) when square_lock=True
+    for handle in ("nw", "ne", "se", "sw"):
+        dx = -120 if "w" in handle else 120
+        dy = -80 if "n" in handle else 80
 
         sq = resize_box(
             start_rect=start,
@@ -203,12 +203,10 @@ def test_resize_box_all_handles_square_and_rect_with_negative_bounds() -> None:
             square_lock=True,
             bounds=bounds,
         )
-        assert sq.width == sq.height
-        assert sq.width > 500
+        assert sq.width == sq.height > 500
         assert sq.x >= bounds.x and sq.right <= bounds.right
         assert sq.y >= bounds.y and sq.bottom <= bounds.bottom
 
-        # Verify anchored corner or edge stayed pinned
         if handle == "se":
             assert (sq.x, sq.y) == (start.x, start.y)
         elif handle == "nw":
@@ -217,16 +215,36 @@ def test_resize_box_all_handles_square_and_rect_with_negative_bounds() -> None:
             assert (sq.x, sq.bottom) == (start.x, start.bottom)
         elif handle == "sw":
             assert (sq.right, sq.y) == (start.right, start.y)
-        elif handle == "e":
-            assert sq.x == start.x
-        elif handle == "w":
-            assert sq.right == start.right
-        elif handle == "s":
-            assert sq.y == start.y
-        elif handle == "n":
-            assert sq.bottom == start.bottom
 
-    # Free rectangle resize changes only pulled dimensions
+    # Edge handles resize ONLY one axis even when square_lock=True
+    assert resize_box(start, "e", 220, 140, 100, 100, True, bounds) == PhysicalRect(
+        start.x, start.y, 620, 500
+    )
+    assert resize_box(start, "w", -20, 140, 100, 100, True, bounds) == PhysicalRect(
+        start.x - 120, start.y, 620, 500
+    )
+    assert resize_box(start, "s", 140, 220, 100, 100, True, bounds) == PhysicalRect(
+        start.x, start.y, 500, 620
+    )
+    assert resize_box(start, "n", 140, -20, 100, 100, True, bounds) == PhysicalRect(
+        start.x, start.y - 120, 500, 620
+    )
+
+    # Proportional corners preserve 2:1 aspect ratio on a non-square rectangle
+    rect_2_1 = PhysicalRect(100, 200, 800, 400)
+    grown = resize_box(rect_2_1, "se", 300, 150, 100, 100, True, bounds)
+    assert grown == PhysicalRect(100, 200, 1000, 500)
+
+    shrunk = resize_box(rect_2_1, "se", -300, -100, 100, 100, True, bounds)
+    assert shrunk == PhysicalRect(100, 200, 400, 200)
+
+    # Proportional corner clamped by bottom boundary preserves 2:1 without squishing
+    near_bottom = PhysicalRect(100, 990, 800, 400)
+    clamped_rect = resize_box(near_bottom, "se", 1000, 1000, 100, 100, True, bounds)
+    assert clamped_rect == PhysicalRect(100, 990, 900, 450)
+    assert clamped_rect.bottom == bounds.bottom
+
+    # Free corner resize (square_lock=False / Shift held) changes both axes independently
     free = resize_box(
         start_rect=start,
         handle="se",
@@ -239,7 +257,7 @@ def test_resize_box_all_handles_square_and_rect_with_negative_bounds() -> None:
     )
     assert free == PhysicalRect(start.x, start.y, 700, 550)
 
-    # Clamping against extreme drag past negative virtual left boundary
+    # Clamping against extreme drag past negative virtual left boundary preserves 1:1
     clamped = resize_box(
         start_rect=PhysicalRect(-2500, 300, 500, 500),
         handle="nw",
@@ -253,7 +271,7 @@ def test_resize_box_all_handles_square_and_rect_with_negative_bounds() -> None:
     assert clamped.width == clamped.height
     assert clamped.x >= bounds.x and clamped.y >= bounds.y
 
-    # Snap rect back to centered square
+    # Snap rect helper stays centered
     snapped = snap_rect_to_square(PhysicalRect(100, 200, 640, 360), bounds)
     assert snapped.width == snapped.height == 640
 
@@ -544,6 +562,44 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         assert dlg.scale_spin.value() == pytest.approx(1.0)
         assert dlg.square_lock_cb.isChecked() is True
         dlg.close()
+    finally:
+        controller.close_overlay()
+        qapp.processEvents()
+
+
+def test_overlay_hit_test_full_edges_and_corner_priority(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    cfg = AppConfig(
+        output_dir=str(tmp_path),
+        box_x=100,
+        box_y=100,
+        box_width=500,
+        box_height=500,
+    )
+    controller = OverlayController()
+    try:
+        controller.show_overlay(cfg)
+        qapp.processEvents()
+
+        target_widget = next(
+            w for w in controller.overlay_widgets if w._mapping.physical.contains_point(350, 350)
+        )
+        box = target_widget._local_box_rect()
+
+        # Corners win over adjacent edges
+        assert target_widget._hit_test(QPointF(box.left() + 2, box.top() + 2)) == "nw"
+        assert target_widget._hit_test(QPointF(box.right() - 2, box.bottom() - 2)) == "se"
+
+        # Off-center points along all 4 dashed edges are draggable
+        assert target_widget._hit_test(QPointF(box.left() + 25, box.top())) == "n"
+        assert target_widget._hit_test(QPointF(box.left() + 25, box.bottom())) == "s"
+        assert target_widget._hit_test(QPointF(box.left(), box.top() + 25)) == "w"
+        assert target_widget._hit_test(QPointF(box.right(), box.top() + 25)) == "e"
+
+        # Interior returns move; outside returns None
+        assert target_widget._hit_test(QPointF(box.center().x(), box.center().y())) == "move"
+        assert target_widget._hit_test(QPointF(box.left() - 30, box.top() - 30)) is None
     finally:
         controller.close_overlay()
         qapp.processEvents()

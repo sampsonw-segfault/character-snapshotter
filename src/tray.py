@@ -337,14 +337,6 @@ class SnapshotterApp(QObject):
 
         candidate = validate_config(AppConfig(**raw_data))
 
-        if (
-            patch.get("square_lock") is True
-            and "box_width" not in patch
-            and "box_height" not in patch
-            and candidate.box_width != candidate.box_height
-        ):
-            candidate.box_height = candidate.box_width
-
         self._config = candidate
         save_config(self._config)
         self._refresh_tray_labels()
