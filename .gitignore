@@ -1,3 +1,7 @@
+# Session scratch & local project notes (never commit)
+project-info.md
+docs/project-info.md
+
 .venv/
 __pycache__/
 *.pyc
