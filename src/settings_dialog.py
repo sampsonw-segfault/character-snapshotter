@@ -26,7 +26,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.config import DEFAULT_HOTKEY, MAX_BOX_SIZE, MIN_BOX_SIZE, AppConfig
+from src.config import (
+    DEFAULT_HOTKEY,
+    MAX_BOX_SIZE,
+    MAX_BRIDGE_PORT,
+    MIN_BOX_SIZE,
+    MIN_BRIDGE_PORT,
+    AppConfig,
+)
 from src.hotkey import (
     MOD_ALT,
     MOD_CONTROL,
@@ -331,6 +338,19 @@ class SettingsDialog(QDialog):
         self.chime_cb = QCheckBox("Play audio chime after saving snapshot", self)
         form.addRow("Feedback:", self.chime_cb)
 
+        bridge_row = QHBoxLayout()
+        bridge_row.setSpacing(8)
+        self.bridge_enabled_cb = QCheckBox("Enable localhost bridge (Character Collager)", self)
+        self.bridge_enabled_cb.toggled.connect(self._on_bridge_toggled)
+        bridge_row.addWidget(self.bridge_enabled_cb)
+        bridge_row.addWidget(QLabel("Port:", self))
+        self.bridge_port_spin = QSpinBox(self)
+        self.bridge_port_spin.setRange(MIN_BRIDGE_PORT, MAX_BRIDGE_PORT)
+        self.bridge_port_spin.setFixedWidth(78)
+        bridge_row.addWidget(self.bridge_port_spin)
+        bridge_row.addStretch(1)
+        form.addRow("Companion Bridge:", bridge_row)
+
         root.addLayout(form)
 
         self.error_label = QLabel("", self)
@@ -474,10 +494,16 @@ class SettingsDialog(QDialog):
         self.opacity_slider.setValue(max(10, min(85, pct)))
         self._update_opacity_label(self.opacity_slider.value())
         self.chime_cb.setChecked(self._config.play_chime)
+        self.bridge_enabled_cb.setChecked(self._config.bridge_enabled)
+        self.bridge_port_spin.setValue(self._config.bridge_port)
+        self._on_bridge_toggled(self._config.bridge_enabled)
         self._update_prefix_preview(self.prefix_edit.text())
 
     def _on_scale_toggled(self, checked: bool) -> None:
         self.scale_target_spin.setEnabled(checked)
+
+    def _on_bridge_toggled(self, checked: bool) -> None:
+        self.bridge_port_spin.setEnabled(checked)
 
     def _update_opacity_label(self, value: int) -> None:
         self.opacity_value_lbl.setText(f"{value}%")
@@ -533,4 +559,6 @@ class SettingsDialog(QDialog):
         self._config.scale_target_px = self.scale_target_spin.value()
         self._config.overlay_opacity = round(self.opacity_slider.value() / 100.0, 2)
         self._config.play_chime = self.chime_cb.isChecked()
+        self._config.bridge_enabled = self.bridge_enabled_cb.isChecked()
+        self._config.bridge_port = self.bridge_port_spin.value()
         self.accept()

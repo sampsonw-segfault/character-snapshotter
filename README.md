@@ -11,6 +11,7 @@ A lightweight Windows screen-region snapshot utility built for quick, repeatable
 - **Square Lock & Free Rectangle:** Toggle `🔒 1:1` / `⬜ Rect` on the floating HUD pill (or hold `Shift` while dragging a resize handle to temporarily invert the lock).
 - **Strictly Proportional Scaling:** Enable **Scale** on the HUD pill or in Settings to up- or down-scale captures (e.g., `700×700 → 500×500`, `350×350 → 500×500`, or `800×400 → 500×250`) using Pillow Lanczos resampling without stretching or warping.
 - **System Tray + Floating HUD Pill:** Lives quietly in the Windows system tray; quick framing controls stay right outside the capture box without entering the screenshot.
+- **Character Collager Companion Bridge:** Runs an optional loopback HTTP/SSE server (`127.0.0.1:47821`, toggleable in Settings) so [Character Collager](https://sampsonw-segfault.github.io/character-collager/) automatically detects the helper, lets you adjust capture/scaling settings from the web toolbar, and live-imports new snapshots directly into the Portrait Browser.
 
 ## Shortcuts While Overlay Is Open
 

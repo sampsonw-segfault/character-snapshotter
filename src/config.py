@@ -14,6 +14,9 @@ MAX_BOX_SIZE = 9999
 MIN_OPACITY = 0.10
 MAX_OPACITY = 0.85
 DEFAULT_HOTKEY = "Win+Alt+S"
+DEFAULT_BRIDGE_PORT = 47821
+MIN_BRIDGE_PORT = 1024
+MAX_BRIDGE_PORT = 65535
 
 
 class CaptureMode(str, Enum):
@@ -48,6 +51,8 @@ class AppConfig:
     overlay_opacity: float = 0.45
     play_chime: bool = True
     capture_mode: str = CaptureMode.BOX.value
+    bridge_enabled: bool = True
+    bridge_port: int = DEFAULT_BRIDGE_PORT
 
 
 def get_config_path() -> Path:
@@ -120,6 +125,8 @@ def validate_config(cfg: AppConfig) -> AppConfig:
         overlay_opacity=_coerce_float(cfg.overlay_opacity, defaults.overlay_opacity, MIN_OPACITY, MAX_OPACITY),
         play_chime=bool(cfg.play_chime),
         capture_mode=capture_mode,
+        bridge_enabled=bool(cfg.bridge_enabled),
+        bridge_port=_coerce_int(cfg.bridge_port, defaults.bridge_port, MIN_BRIDGE_PORT, MAX_BRIDGE_PORT),
     )
 
 

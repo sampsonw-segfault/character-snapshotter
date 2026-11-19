@@ -534,6 +534,33 @@ class OverlayController(QObject):
         config.scale_anchor_axis = self._scale_anchor_axis
         config.scale_target_px = self._scale_target_px
 
+    def apply_config(self, config: AppConfig) -> None:
+        """Push updated config settings into the currently visible overlay and HUD."""
+        self._default_w = config.default_width
+        self._default_h = config.default_height
+        self._square_lock = config.square_lock
+        self._scale_enabled = config.scale_enabled
+        self._scale_anchor_axis = config.scale_anchor_axis
+        self._scale_target_px = config.scale_target_px
+        self._opacity = config.overlay_opacity
+
+        if self._active:
+            target_w = max(DEFAULT_MIN_SIZE, config.box_width)
+            target_h = target_w if self._square_lock else max(DEFAULT_MIN_SIZE, config.box_height)
+            x = self._box_rect.center_x - target_w // 2
+            y = self._box_rect.center_y - target_h // 2
+            resized = clamp_box_to_monitors(
+                PhysicalRect(x, y, target_w, target_h),
+                self._monitor_rects,
+            )
+            if self._square_lock and resized.width != resized.height:
+                resized = snap_rect_to_square(resized, self._virtual_bounds)
+            self._box_rect = resized
+            self.update_all_screens()
+            self._sync_hud()
+            self._position_hud()
+            self._hud.raise_()
+
     def hide_for_capture(self, callback: Callable[[], None], delay_ms: int = 45) -> PhysicalRect:
         """Hide overlay + HUD immediately, flush events, and run callback after DWM settles."""
         self._capturing = True
