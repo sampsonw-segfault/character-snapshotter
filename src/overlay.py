@@ -354,7 +354,7 @@ class OverlayController(QObject):
     """Coordinates multi-monitor overlay windows, the capture box, and the floating HUD pill."""
 
     capture_requested = Signal()
-    cancelled = Signal()
+    canceled = Signal()
     settings_requested = Signal()
     state_changed = Signal()
 
@@ -580,7 +580,7 @@ class OverlayController(QObject):
         if not self._active:
             return
         self.close_overlay()
-        self.cancelled.emit()
+        self.canceled.emit()
 
     def write_state_to_config(self, config: AppConfig) -> None:
         """Persist current box rect and HUD toggle values back onto config."""

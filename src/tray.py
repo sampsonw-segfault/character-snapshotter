@@ -119,7 +119,7 @@ class SnapshotterApp(QObject):
 
         self._hotkey_manager.triggered.connect(self.on_hotkey_triggered)
         self._overlay.capture_requested.connect(self._on_overlay_capture_requested)
-        self._overlay.cancelled.connect(self._on_overlay_cancelled)
+        self._overlay.canceled.connect(self._on_overlay_canceled)
         self._overlay.settings_requested.connect(self.open_settings)
         self._overlay.state_changed.connect(self._state_broadcast_timer.start)
 
@@ -186,7 +186,7 @@ class SnapshotterApp(QObject):
             )
         else:
             self._tray.showMessage(
-                "Character Snapshotter — Hotkey Unavailable",
+                "Character Snapshotter - Hotkey Unavailable",
                 f"Could not register {self._config.hotkey}: {err}",
                 QSystemTrayIcon.Warning,
                 5000,
@@ -198,7 +198,7 @@ class SnapshotterApp(QObject):
             ok, err = self._bridge.start(self._config.bridge_port)
             if not ok:
                 self._tray.showMessage(
-                    "Character Snapshotter — Bridge Unavailable",
+                    "Character Snapshotter - Bridge Unavailable",
                     f"Could not listen on 127.0.0.1:{self._config.bridge_port}: {err}",
                     QSystemTrayIcon.Warning,
                     4500,
@@ -291,7 +291,7 @@ class SnapshotterApp(QObject):
                 if play_chime:
                     play_capture_chime()
                 self._tray.setToolTip(
-                    f"Character Snapshotter ({self._config.hotkey}) — Last: {out_path.name}"
+                    f"Character Snapshotter ({self._config.hotkey}) - Last: {out_path.name}"
                 )
                 if self._bridge.is_running:
                     out_w, out_h = compute_scaled_output_size(
@@ -315,7 +315,7 @@ class SnapshotterApp(QObject):
             self._bridge.broadcast_overlay_state(False)
         self._overlay.hide_for_capture(_do_grab)
 
-    def _on_overlay_cancelled(self) -> None:
+    def _on_overlay_canceled(self) -> None:
         self._state_broadcast_timer.stop()
         self._overlay.write_state_to_config(self._config)
         save_config(self._config)
@@ -458,7 +458,7 @@ class SnapshotterApp(QObject):
                 ok, err = self._hotkey_manager.register(self._config.hotkey)
                 if not ok:
                     self._tray.showMessage(
-                        "Character Snapshotter — Hotkey Unavailable",
+                        "Character Snapshotter - Hotkey Unavailable",
                         f"Could not restore {self._config.hotkey}: {err}",
                         QSystemTrayIcon.Warning,
                         4500,
