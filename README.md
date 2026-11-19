@@ -27,31 +27,13 @@ A lightweight Windows screen-region snapshot utility built for quick, repeatable
 | `S` | Toggle proportional corner drag lock |
 | `Esc` or Right-click | Cancel overlay without capturing |
 
-## Setup & Running
-
-### Option 1: Standalone Executable (Recommended)
+## Setup
 
 1. Download **`CharacterSnapshotter.exe`** from the [latest GitHub Release](https://github.com/sampsonw-segfault/character-snapshotter/releases/latest).
-2. Double-click `CharacterSnapshotter.exe` to run (no Python installation required).
-   - If Windows SmartScreen warns on first launch (unsigned executable), click **More info** → **Run anyway**.
+2. Double-click `CharacterSnapshotter.exe` to run.
+   - If Windows SmartScreen warns on first launch, click **More info** → **Run anyway**.
 3. Look for the Character Snapshotter icon in your Windows system tray (right-click for **Trigger Overlay**, **Settings…**, **Open Output Folder**, or **Quit**).
-4. Settings are saved automatically to `%APPDATA%\CharacterSnapshotter\config.json` (plain JSON, safe to read or back up) and screenshots default to `%USERPROFILE%\Pictures\CharacterSnapshotter\`.
-
-### Option 2: Running from Source
-
-1. Ensure **Python 3.10+** (tested on Python 3.14) is installed on Windows.
-2. Double-click **`start_snapshotter.bat`** (first run automatically creates `.venv` and installs `PySide6`, `mss`, and `Pillow`).
-3. Look for the Character Snapshotter icon in your Windows system tray. Source runs store settings in `config.json` in the repository root.
-4. For troubleshooting with console output visible, run **`start_snapshotter_console.bat`**.
-
-## Building the Standalone `.exe`
-
-To build `dist\CharacterSnapshotter.exe` yourself using PyInstaller:
-
-```bat
-build_exe.bat
-```
-
-This uses `CharacterSnapshotter.spec` to produce a single-file `--windowed` binary with unused Qt WebEngine/Quick/3D modules stripped.
+4. Press **`Win+Alt+S`** (configurable in Settings) to open the capture overlay, then press it again (or click the camera button on the pill) to take a snapshot.
+5. Settings are saved automatically to `%APPDATA%\CharacterSnapshotter\config.json` (plain JSON, safe to read or back up) and screenshots default to `%USERPROFILE%\Pictures\CharacterSnapshotter\`.
 
 > **Game Capture Tip:** When capturing from Crusader Kings III or other full-screen games, set the game's display mode to **Borderless Fullscreen** (or **Windowed**) so the Windows overlay can draw over the game window.
