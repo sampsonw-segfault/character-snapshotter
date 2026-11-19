@@ -5,7 +5,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
-    QAbstractSpinBox,
     QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
@@ -27,10 +26,9 @@ class _HudSpinBox(QSpinBox):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setRange(MIN_BOX_SIZE, MAX_BOX_SIZE)
-        self.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.setKeyboardTracking(False)
         self.setAlignment(Qt.AlignCenter)
-        self.setFixedWidth(54)
+        self.setFixedWidth(58)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key_Escape:
@@ -50,10 +48,9 @@ class _HudScaleSpinBox(QDoubleSpinBox):
         self.setRange(MIN_SCALE, MAX_SCALE)
         self.setDecimals(4)
         self.setSingleStep(0.1)
-        self.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.setKeyboardTracking(False)
         self.setAlignment(Qt.AlignCenter)
-        self.setFixedWidth(62)
+        self.setFixedWidth(64)
 
     def textFromValue(self, value: float) -> str:
         formatted = f"{value:.4f}".rstrip("0").rstrip(".")
@@ -184,6 +181,12 @@ class FloatingHudWidget(QWidget):
             }
             QSpinBox:focus, QDoubleSpinBox:focus {
                 border: 1px solid #DAA520;
+            }
+            QSpinBox::up-button, QSpinBox::down-button,
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+                width: 0px;
+                height: 0px;
+                border: none;
             }
             QPushButton#HudIconButton {
                 background-color: #2A241E;

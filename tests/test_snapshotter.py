@@ -445,6 +445,12 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         assert hud.cap_h_spin.value() == 500
         assert hud.scale_spin.value() == pytest.approx(1.0)
         assert hud.scale_spin.textFromValue(1.0) == "1"
+        assert hud.cap_w_spin.lineEdit().width() >= 40
+        assert hud.cap_h_spin.lineEdit().width() >= 40
+        assert hud.scale_spin.lineEdit().width() >= 40
+        assert hud.cap_w_spin.lineEdit().text() == "500"
+        assert hud.cap_h_spin.lineEdit().text() == "500"
+        assert hud.scale_spin.lineEdit().text() == "1"
 
         # Editing capture width and height updates box dimensions independently and live
         hud.cap_w_spin.setValue(800)
@@ -465,6 +471,8 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         qapp.processEvents()
         assert hud.cap_w_spin.value() == 650
         assert hud.cap_h_spin.value() == 650
+        assert hud.cap_w_spin.lineEdit().text() == "650"
+        assert hud.cap_h_spin.lineEdit().text() == "650"
 
         # Multi-key diagonal movement & opposite-direction cancellation
         start_rect = controller.box_rect
