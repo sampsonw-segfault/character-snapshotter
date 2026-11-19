@@ -37,9 +37,9 @@ _REMOTE_PATCHABLE_FIELDS = {
 }
 
 
-def create_tray_icon() -> QIcon:
-    """Render a crisp dark-and-gold viewfinder icon programmatically."""
-    size = 64
+def render_app_icon_pixmap(size: int) -> QPixmap:
+    """Render the dark-and-gold viewfinder icon at the requested pixel size."""
+    s = size / 64.0
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.transparent)
 
@@ -47,22 +47,41 @@ def create_tray_icon() -> QIcon:
     painter.setRenderHint(QPainter.Antialiasing, True)
 
     painter.setBrush(QColor("#181410"))
-    painter.setPen(QPen(QColor("#4A4238"), 3.0))
-    painter.drawRoundedRect(QRectF(3.0, 3.0, size - 6.0, size - 6.0), 12.0, 12.0)
+    painter.setPen(QPen(QColor("#4A4238"), max(1.0, 3.0 * s)))
+    painter.drawRoundedRect(
+        QRectF(3.0 * s, 3.0 * s, size - 6.0 * s, size - 6.0 * s),
+        12.0 * s,
+        12.0 * s,
+    )
 
-    dash_pen = QPen(QColor("#FFD97D"), 3.5, Qt.DashLine)
+    dash_pen = QPen(QColor("#FFD97D"), max(1.2, 3.5 * s), Qt.DashLine)
     dash_pen.setDashPattern([3.0, 2.2])
     painter.setBrush(Qt.NoBrush)
     painter.setPen(dash_pen)
-    painter.drawRect(QRectF(14.0, 14.0, size - 28.0, size - 28.0))
+    painter.drawRect(QRectF(14.0 * s, 14.0 * s, size - 28.0 * s, size - 28.0 * s))
 
     painter.setBrush(QColor("#DAA520"))
     painter.setPen(Qt.NoPen)
-    for cx, cy in ((14.0, 14.0), (50.0, 14.0), (14.0, 50.0), (50.0, 50.0)):
-        painter.drawRect(QRectF(cx - 3.5, cy - 3.5, 7.0, 7.0))
+    half = 3.5 * s
+    corner = 7.0 * s
+    for cx, cy in (
+        (14.0 * s, 14.0 * s),
+        (size - 14.0 * s, 14.0 * s),
+        (14.0 * s, size - 14.0 * s),
+        (size - 14.0 * s, size - 14.0 * s),
+    ):
+        painter.drawRect(QRectF(cx - half, cy - half, corner, corner))
 
     painter.end()
-    return QIcon(pixmap)
+    return pixmap
+
+
+def create_tray_icon() -> QIcon:
+    """Build a crisp multi-size dark-and-gold viewfinder icon."""
+    icon = QIcon()
+    for sz in (16, 24, 32, 48, 64, 128):
+        icon.addPixmap(render_app_icon_pixmap(sz))
+    return icon
 
 
 class SnapshotterApp(QObject):
@@ -120,7 +139,7 @@ class SnapshotterApp(QObject):
         self._open_folder_action.triggered.connect(self.open_output_folder)
         self._menu.addAction(self._open_folder_action)
 
-        self._menu.addSeparator()
+        self._bridge_sep = self._menu.addSeparator()
 
         self._bridge_status_action = QAction("Bridge: Off", self._menu)
         self._bridge_status_action.setEnabled(False)
@@ -190,6 +209,9 @@ class SnapshotterApp(QObject):
         hk = self._config.hotkey
         self._trigger_action.setText(f"Trigger Overlay ({hk})")
         self._tray.setToolTip(f"Character Snapshotter ({hk})")
+        show_bridge = self._bridge.is_running or self._config.bridge_enabled
+        self._bridge_sep.setVisible(show_bridge)
+        self._bridge_status_action.setVisible(show_bridge)
         if self._bridge.is_running:
             self._bridge_status_action.setText(f"Bridge: 127.0.0.1:{self._bridge.actual_port}")
         elif self._config.bridge_enabled:

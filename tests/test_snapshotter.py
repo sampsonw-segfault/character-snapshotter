@@ -24,7 +24,7 @@ from src.capture import (
     generate_timestamp_path,
     process_captured_image,
 )
-from src.config import AppConfig, CaptureMode, load_config, save_config
+from src.config import AppConfig, CaptureMode, get_config_path, load_config, save_config
 from src.geometry import (
     PhysicalRect,
     ScreenMapping,
@@ -107,6 +107,26 @@ def test_config_defaults_roundtrip_and_fallback(tmp_path: Path) -> None:
 
     cfg_path.write_text('{"scale": 0.001}', encoding="utf-8")
     assert load_config(cfg_path).scale == pytest.approx(0.05)
+
+
+def test_config_path_unfrozen_and_frozen_appdata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert AppConfig().bridge_enabled is False
+    assert get_config_path() == _PROJECT_ROOT / "config.json"
+
+    roaming = tmp_path / "Roaming"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("APPDATA", str(roaming))
+
+    expected = roaming / "CharacterSnapshotter" / "config.json"
+    assert get_config_path() == expected
+
+    save_config(AppConfig(box_width=640, box_height=360))
+    assert expected.exists()
+    reloaded = load_config()
+    assert reloaded.box_width == 640
+    assert reloaded.box_height == 360
 
 
 @pytest.mark.parametrize(

@@ -351,7 +351,7 @@ class SettingsDialog(QDialog):
 
         bridge_row = QHBoxLayout()
         bridge_row.setSpacing(8)
-        self.bridge_enabled_cb = QCheckBox("Enable localhost bridge (Character Collager)", self)
+        self.bridge_enabled_cb = QCheckBox("Enable local companion bridge (optional)", self)
         self.bridge_enabled_cb.toggled.connect(self._on_bridge_toggled)
         bridge_row.addWidget(self.bridge_enabled_cb)
         bridge_row.addWidget(QLabel("Port:", self))

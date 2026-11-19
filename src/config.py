@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from pathlib import Path
@@ -52,12 +54,16 @@ class AppConfig:
     overlay_opacity: float = 0.45
     play_chime: bool = True
     capture_mode: str = CaptureMode.BOX.value
-    bridge_enabled: bool = True
+    bridge_enabled: bool = False
     bridge_port: int = DEFAULT_BRIDGE_PORT
 
 
 def get_config_path() -> Path:
-    """Return the path to config.json in the project root."""
+    """Return the path to config.json (%APPDATA% when frozen, repo root when running from source)."""
+    if getattr(sys, "frozen", False):
+        appdata = os.environ.get("APPDATA")
+        base_dir = Path(appdata) if appdata else (Path.home() / "AppData" / "Roaming")
+        return base_dir / "CharacterSnapshotter" / "config.json"
     return Path(__file__).resolve().parent.parent / "config.json"
 
 

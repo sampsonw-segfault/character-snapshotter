@@ -6,4 +6,5 @@ config.json
 dist/
 build/
 *.spec
+!CharacterSnapshotter.spec
 *.log
