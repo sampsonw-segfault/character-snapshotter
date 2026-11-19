@@ -36,4 +36,4 @@ A lightweight Windows screen-region snapshot utility built for quick, repeatable
 | `S` | Toggle proportional corner drag lock |
 | `Esc` or Right-click | Cancel overlay without capturing |
 
-> **Game Capture Tip:** When capturing from Crusader Kings III or other full-screen games, set the game's display mode to **Borderless Fullscreen** (or **Windowed**) so the Windows overlay can draw over the game window.
+> **Game Capture Tip:** When capturing from full-screen games, set the game's display mode to **Borderless Fullscreen** (or **Windowed**) so the Windows overlay can draw over the game window.
