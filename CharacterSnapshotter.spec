@@ -126,8 +126,8 @@ pyz = PYZ(a.pure)
 
 version_info = VSVersionInfo(
     ffi=FixedFileInfo(
-        filevers=(1, 0, 0, 0),
-        prodvers=(1, 0, 0, 0),
+        filevers=(1, 1, 0, 0),
+        prodvers=(1, 1, 0, 0),
         mask=0x3F,
         flags=0x0,
         OS=0x40004,
@@ -145,11 +145,11 @@ version_info = VSVersionInfo(
                             "FileDescription",
                             "Character Snapshotter - Fine-Tuned Pixel-Perfect Screen Snapshots",
                         ),
-                        StringStruct("FileVersion", "1.0.0"),
+                        StringStruct("FileVersion", "1.1.0"),
                         StringStruct("InternalName", "CharacterSnapshotter"),
                         StringStruct("OriginalFilename", "CharacterSnapshotter.exe"),
                         StringStruct("ProductName", "Character Snapshotter"),
-                        StringStruct("ProductVersion", "1.0.0"),
+                        StringStruct("ProductVersion", "1.1.0"),
                     ],
                 )
             ]

@@ -15,7 +15,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.config import MAX_BOX_SIZE, MAX_SCALE, MIN_BOX_SIZE, MIN_SCALE
+from src.config import (
+    DEFAULT_VIDEO_FORMAT,
+    DEFAULT_VIDEO_FPS,
+    MAX_BOX_SIZE,
+    MAX_SCALE,
+    MIN_BOX_SIZE,
+    MIN_SCALE,
+)
 from src.geometry import compute_scaled_output_size
 
 
@@ -23,6 +30,18 @@ _CAMERA_SVG = """
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFD97D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
   <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
   <circle cx="12" cy="13" r="3"/>
+</svg>
+"""
+
+_RECORD_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <circle cx="12" cy="12" r="6.5" fill="#E05A4F" stroke="#F6A49D" stroke-width="1.5"/>
+</svg>
+"""
+
+_STOP_RECORD_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="6" y="6" width="12" height="12" rx="2.5" ry="2.5" fill="#F4EFE6" stroke="#FFFFFF" stroke-width="1.2"/>
 </svg>
 """
 
@@ -113,6 +132,7 @@ class FloatingHudWidget(QWidget):
     """Compact floating control bar positioned adjacent to the capture box."""
 
     capture_clicked = Signal()
+    record_clicked = Signal()
     capture_size_edited = Signal(int, int)
     scale_edited = Signal(float)
     settings_clicked = Signal()
@@ -131,8 +151,19 @@ class FloatingHudWidget(QWidget):
         self._cap_w = 500
         self._cap_h = 500
         self._scale = 1.0
+        self._recording = False
+        self._saving = False
+        self._video_format = DEFAULT_VIDEO_FORMAT
+        self._video_fps = DEFAULT_VIDEO_FPS
+
+        self._record_idle_icon = _svg_to_icon(_RECORD_SVG, logical_size=15)
+        self._record_stop_icon = _svg_to_icon(_STOP_RECORD_SVG, logical_size=15)
 
         self._build_ui()
+
+    @property
+    def is_recording(self) -> bool:
+        return self._recording
 
     def _build_ui(self) -> None:
         outer = QHBoxLayout(self)
@@ -152,9 +183,25 @@ class FloatingHudWidget(QWidget):
         self.capture_btn.setIconSize(QSize(15, 15))
         self.capture_btn.setFixedSize(28, 24)
         self.capture_btn.setCursor(Qt.PointingHandCursor)
-        self.capture_btn.setToolTip("Capture snapshot")
+        self.capture_btn.setToolTip("Capture PNG snapshot")
         self.capture_btn.clicked.connect(self.capture_clicked)
         layout.addWidget(self.capture_btn)
+
+        self.record_btn = QPushButton("", self._pill)
+        self.record_btn.setObjectName("HudRecordButton")
+        self.record_btn.setProperty("recording", False)
+        self.record_btn.setIcon(self._record_idle_icon)
+        self.record_btn.setIconSize(QSize(15, 15))
+        self.record_btn.setFixedSize(28, 24)
+        self.record_btn.setCursor(Qt.PointingHandCursor)
+        self.record_btn.setToolTip("Record WebP clip (30 FPS)")
+        self.record_btn.clicked.connect(self.record_clicked)
+        layout.addWidget(self.record_btn)
+
+        self.rec_timer_label = QLabel("REC 0:00", self._pill)
+        self.rec_timer_label.setObjectName("HudRecTimerLabel")
+        self.rec_timer_label.hide()
+        layout.addWidget(self.rec_timer_label)
 
         sep_left = QFrame(self._pill)
         sep_left.setObjectName("HudSeparator")
@@ -235,6 +282,12 @@ class FloatingHudWidget(QWidget):
                 font-size: 12px;
                 font-weight: 600;
             }
+            QLabel#HudRecTimerLabel {
+                color: #F6A49D;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 0px 2px;
+            }
             QFrame#HudSeparator {
                 background-color: #3D362E;
             }
@@ -249,6 +302,11 @@ class FloatingHudWidget(QWidget):
             }
             QSpinBox:focus, QDoubleSpinBox:focus {
                 border: 1px solid #DAA520;
+            }
+            QSpinBox:disabled, QDoubleSpinBox:disabled {
+                color: #7D756B;
+                background-color: #1C1814;
+                border-color: #352F28;
             }
             QSpinBox::up-button, QSpinBox::down-button,
             QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
@@ -266,6 +324,32 @@ class FloatingHudWidget(QWidget):
                 background-color: #49391B;
                 border-color: #FFD97D;
             }
+            QPushButton#HudCaptureButton:disabled {
+                background-color: #1C1814;
+                border-color: #352F28;
+            }
+            QPushButton#HudRecordButton {
+                background-color: #2D201E;
+                border: 1px solid #6E3B36;
+                border-radius: 5px;
+                padding: 0px;
+            }
+            QPushButton#HudRecordButton:hover {
+                background-color: #412724;
+                border-color: #E05A4F;
+            }
+            QPushButton#HudRecordButton[recording="true"] {
+                background-color: #7A231E;
+                border: 1px solid #E05A4F;
+            }
+            QPushButton#HudRecordButton[recording="true"]:hover {
+                background-color: #932B25;
+                border-color: #F6A49D;
+            }
+            QPushButton#HudRecordButton:disabled {
+                background-color: #261D1B;
+                border-color: #4A312E;
+            }
             QPushButton#HudIconButton {
                 background-color: #2A241E;
                 color: #F4EFE6;
@@ -279,6 +363,10 @@ class FloatingHudWidget(QWidget):
                 background-color: #362E26;
                 border-color: #DAA520;
             }
+            QPushButton#HudIconButton:disabled {
+                background-color: #1C1814;
+                border-color: #352F28;
+            }
             """
         )
         self.adjustSize()
@@ -291,6 +379,89 @@ class FloatingHudWidget(QWidget):
 
     def _on_scale_changed(self, value: float) -> None:
         self.scale_edited.emit(float(value))
+
+    def set_video_preferences(self, video_format: str, video_fps: int) -> None:
+        self._video_format = video_format
+        self._video_fps = int(video_fps)
+        if not self._recording and not self._saving:
+            self.record_btn.setToolTip(
+                f"Record {self._video_format.upper()} clip ({self._video_fps} FPS)"
+            )
+
+    def set_recording_state(
+        self,
+        recording: bool,
+        elapsed_seconds: float = 0.0,
+        saving: bool = False,
+    ) -> None:
+        """Update record/stop icon, timer label, and lock viewport-editing controls while recording."""
+        self._recording = bool(recording)
+        self._saving = bool(saving)
+
+        if self._saving:
+            for w in (
+                self.capture_btn,
+                self.record_btn,
+                self.cap_w_spin,
+                self.cap_h_spin,
+                self.scale_spin,
+                self.settings_btn,
+                self.cancel_btn,
+            ):
+                w.setEnabled(False)
+            self.record_btn.setIcon(self._record_stop_icon)
+            self.record_btn.setProperty("recording", True)
+            self.record_btn.setToolTip("Saving recording...")
+            self.rec_timer_label.setText("Saving...")
+            self.rec_timer_label.show()
+        elif self._recording:
+            for w in (
+                self.capture_btn,
+                self.cap_w_spin,
+                self.cap_h_spin,
+                self.scale_spin,
+                self.settings_btn,
+            ):
+                w.setEnabled(False)
+            self.record_btn.setEnabled(True)
+            self.cancel_btn.setEnabled(True)
+            self.record_btn.setIcon(self._record_stop_icon)
+            self.record_btn.setProperty("recording", True)
+            self.record_btn.setToolTip("Stop recording and save (viewport locked)")
+            self.cancel_btn.setToolTip("Cancel recording (discard)")
+            self.update_recording_elapsed(elapsed_seconds)
+            self.rec_timer_label.show()
+        else:
+            for w in (
+                self.capture_btn,
+                self.record_btn,
+                self.cap_w_spin,
+                self.cap_h_spin,
+                self.scale_spin,
+                self.settings_btn,
+                self.cancel_btn,
+            ):
+                w.setEnabled(True)
+            self.record_btn.setIcon(self._record_idle_icon)
+            self.record_btn.setProperty("recording", False)
+            self.record_btn.setToolTip(
+                f"Record {self._video_format.upper()} clip ({self._video_fps} FPS)"
+            )
+            self.cancel_btn.setToolTip("Cancel overlay (Esc)")
+            self.rec_timer_label.hide()
+
+        self.record_btn.style().unpolish(self.record_btn)
+        self.record_btn.style().polish(self.record_btn)
+        self.adjustSize()
+
+    def update_recording_elapsed(self, elapsed_seconds: float) -> None:
+        if self._saving:
+            return
+        total = max(0, int(elapsed_seconds))
+        mins, secs = divmod(total, 60)
+        text = f"REC {mins}:{secs:02d}"
+        if self.rec_timer_label.text() != text:
+            self.rec_timer_label.setText(text)
 
     def commit_pending_edits(self) -> None:
         """Commit any in-progress typed text in spinboxes before capturing."""

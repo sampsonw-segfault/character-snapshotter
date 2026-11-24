@@ -60,6 +60,9 @@ def config_to_bridge_dict(cfg: AppConfig) -> dict[str, Any]:
         "overlay_opacity": cfg.overlay_opacity,
         "play_chime": cfg.play_chime,
         "capture_mode": cfg.capture_mode,
+        "video_format": cfg.video_format,
+        "video_fps": cfg.video_fps,
+        "record_cursor": cfg.record_cursor,
         "bridge_enabled": cfg.bridge_enabled,
         "bridge_port": cfg.bridge_port,
     }

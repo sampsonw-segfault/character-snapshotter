@@ -13,6 +13,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
@@ -32,9 +33,11 @@ from src.config import (
     MAX_BOX_SIZE,
     MAX_BRIDGE_PORT,
     MAX_SCALE,
+    MAX_VIDEO_FPS,
     MIN_BOX_SIZE,
     MIN_BRIDGE_PORT,
     MIN_SCALE,
+    MIN_VIDEO_FPS,
     AppConfig,
 )
 from src.hotkey import (
@@ -335,6 +338,33 @@ class SettingsDialog(QDialog):
         scale_row.addStretch(1)
         form.addRow("Output Scale:", scale_row)
 
+        video_col = QVBoxLayout()
+        video_col.setSpacing(4)
+        video_row = QHBoxLayout()
+        video_row.setSpacing(8)
+        self.video_format_combo = QComboBox(self)
+        self.video_format_combo.addItem("WebP (.webp)", "webp")
+        self.video_format_combo.addItem("GIF (.gif)", "gif")
+        self.video_format_combo.setFixedWidth(136)
+        self.video_format_combo.currentIndexChanged.connect(self._update_video_hint)
+        video_row.addWidget(self.video_format_combo)
+
+        video_row.addWidget(QLabel("FPS:", self))
+        self.video_fps_spin = QSpinBox(self)
+        self.video_fps_spin.setRange(MIN_VIDEO_FPS, MAX_VIDEO_FPS)
+        self.video_fps_spin.setFixedWidth(74)
+        video_row.addWidget(self.video_fps_spin)
+        video_row.addStretch(1)
+        video_col.addLayout(video_row)
+
+        self.video_hint_label = QLabel("", self)
+        self.video_hint_label.setObjectName("SettingsHint")
+        video_col.addWidget(self.video_hint_label)
+
+        self.record_cursor_cb = QCheckBox("Include mouse pointer in recordings", self)
+        video_col.addWidget(self.record_cursor_cb)
+        form.addRow("Video Recording:", video_col)
+
         opacity_row = QHBoxLayout()
         opacity_row.setSpacing(10)
         self.opacity_slider = QSlider(Qt.Horizontal, self)
@@ -410,7 +440,7 @@ class SettingsDialog(QDialog):
                 padding: 8px 10px;
                 font-size: 12px;
             }
-            QLineEdit, QSpinBox, QDoubleSpinBox {
+            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
                 background-color: #241F1A;
                 color: #F4EFE6;
                 border: 1px solid #4A4238;
@@ -418,8 +448,15 @@ class SettingsDialog(QDialog):
                 padding: 5px 8px;
                 font-size: 13px;
             }
-            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
                 border-color: #DAA520;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #241F1A;
+                color: #F4EFE6;
+                border: 1px solid #4A4238;
+                selection-background-color: #463718;
+                selection-color: #FFD97D;
             }
             QSpinBox:disabled, QDoubleSpinBox:disabled {
                 color: #7D756B;
@@ -500,6 +537,11 @@ class SettingsDialog(QDialog):
         self.default_h_spin.setValue(self._config.default_height)
         self.square_lock_cb.setChecked(self._config.square_lock)
         self.scale_spin.setValue(self._config.scale)
+        fmt_idx = self.video_format_combo.findData(self._config.video_format)
+        self.video_format_combo.setCurrentIndex(fmt_idx if fmt_idx >= 0 else 0)
+        self.video_fps_spin.setValue(self._config.video_fps)
+        self.record_cursor_cb.setChecked(self._config.record_cursor)
+        self._update_video_hint()
         pct = round(self._config.overlay_opacity * 100)
         self.opacity_slider.setValue(max(10, min(85, pct)))
         self._update_opacity_label(self.opacity_slider.value())
@@ -514,6 +556,17 @@ class SettingsDialog(QDialog):
 
     def _update_opacity_label(self, value: int) -> None:
         self.opacity_value_lbl.setText(f"{value}%")
+
+    def _update_video_hint(self) -> None:
+        fmt = str(self.video_format_combo.currentData() or "webp")
+        if fmt == "gif":
+            self.video_hint_label.setText(
+                "GIF: 256-color universal compatibility (browsers cap playback at 50 FPS max)"
+            )
+        else:
+            self.video_hint_label.setText(
+                "WebP: crisp 24-bit color, smaller files, supports up to 60 FPS (default 30)"
+            )
 
     def _update_prefix_preview(self, prefix: str) -> None:
         cleaned = "".join(ch for ch in prefix if ch not in '\\/:*?"<>|')
@@ -564,6 +617,9 @@ class SettingsDialog(QDialog):
         self._config.default_height = self.default_h_spin.value()
         self._config.square_lock = self.square_lock_cb.isChecked()
         self._config.scale = round(float(self.scale_spin.value()), 2)
+        self._config.video_format = str(self.video_format_combo.currentData() or "webp")
+        self._config.video_fps = int(self.video_fps_spin.value())
+        self._config.record_cursor = self.record_cursor_cb.isChecked()
         self._config.overlay_opacity = round(self.opacity_slider.value() / 100.0, 2)
         self._config.play_chime = self.chime_cb.isChecked()
         self._config.bridge_enabled = self.bridge_enabled_cb.isChecked()

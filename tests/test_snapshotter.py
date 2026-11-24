@@ -20,9 +20,13 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.capture import (
+    RegionRecorder,
     capture_region_to_file,
+    compute_frame_durations_ms,
     generate_timestamp_path,
+    overlay_cursor_on_image,
     process_captured_image,
+    save_recorded_frames,
 )
 from src.config import AppConfig, CaptureMode, get_config_path, load_config, save_config
 from src.geometry import (
@@ -68,6 +72,9 @@ def test_config_defaults_roundtrip_and_fallback(tmp_path: Path) -> None:
     assert default_cfg.square_lock is False
     assert default_cfg.scale == pytest.approx(1.0)
     assert default_cfg.capture_mode == CaptureMode.BOX.value
+    assert default_cfg.video_format == "webp"
+    assert default_cfg.video_fps == 30
+    assert default_cfg.record_cursor is True
 
     custom_cfg = AppConfig(
         hotkey="Ctrl+Shift+F9",
@@ -83,6 +90,9 @@ def test_config_defaults_roundtrip_and_fallback(tmp_path: Path) -> None:
         scale=0.71,
         overlay_opacity=0.6,
         play_chime=False,
+        video_format="gif",
+        video_fps=24,
+        record_cursor=False,
     )
     save_config(custom_cfg, cfg_path)
     reloaded = load_config(cfg_path)
@@ -97,16 +107,20 @@ def test_config_defaults_roundtrip_and_fallback(tmp_path: Path) -> None:
 
     # Unknown fields (including legacy scale keys) and out-of-range numeric values are handled safely
     cfg_path.write_text(
-        '{"unknown_key": 123, "scale_enabled": true, "box_width": 2, "overlay_opacity": 0.99, "scale": 25.0}',
+        '{"unknown_key": 123, "scale_enabled": true, "box_width": 2, "overlay_opacity": 0.99, "scale": 25.0, "video_format": "mp4", "video_fps": 120}',
         encoding="utf-8",
     )
     sanitized = load_config(cfg_path)
     assert sanitized.box_width == 16
     assert sanitized.overlay_opacity == pytest.approx(0.85)
     assert sanitized.scale == pytest.approx(9.99)
+    assert sanitized.video_format == "webp"
+    assert sanitized.video_fps == 60
 
-    cfg_path.write_text('{"scale": 0.001}', encoding="utf-8")
-    assert load_config(cfg_path).scale == pytest.approx(0.05)
+    cfg_path.write_text('{"scale": 0.001, "video_fps": 1}', encoding="utf-8")
+    low_cfg = load_config(cfg_path)
+    assert low_cfg.scale == pytest.approx(0.05)
+    assert low_cfg.video_fps == 5
 
 
 def test_config_path_unfrozen_and_frozen_appdata(
@@ -491,10 +505,12 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         assert hud.isVisible()
         assert not hasattr(hud, "reset_btn")
         assert not hasattr(hud, "square_btn")
-        assert hud.capture_btn.x() < hud.cap_w_spin.x()
-        for btn in (hud.capture_btn, hud.settings_btn, hud.cancel_btn):
+        assert hud.capture_btn.x() < hud.record_btn.x() < hud.cap_w_spin.x()
+        for btn in (hud.capture_btn, hud.record_btn, hud.settings_btn, hud.cancel_btn):
             assert btn.text() == ""
             assert not btn.icon().isNull()
+        assert hud.record_btn.property("recording") is False
+        assert not hud.rec_timer_label.isVisible()
         assert hud.cap_w_spin.maximum() == 99999
         assert hud.cap_h_spin.maximum() == 99999
         assert hud.cap_w_spin.width() > hud.scale_spin.width()
@@ -593,6 +609,9 @@ def test_qt_overlay_hud_and_settings_smoke(qapp: QApplication, tmp_path: Path) -
         assert dlg.default_w_spin.value() == 500
         assert dlg.scale_spin.value() == pytest.approx(1.0)
         assert dlg.square_lock_cb.isChecked() is False
+        assert dlg.video_format_combo.currentData() == "webp"
+        assert dlg.video_fps_spin.value() == 30
+        assert dlg.record_cursor_cb.isChecked() is True
         dlg.close()
     finally:
         controller.close_overlay()
@@ -783,3 +802,254 @@ def test_hud_camera_button_triggers_capture_and_closes_overlay(
     finally:
         app_ctrl.shutdown()
         qapp.processEvents()
+
+
+def test_frame_durations_and_scaled_webp_gif_save(tmp_path: Path) -> None:
+    # WebP preserves exact ms timestamps without cumulative drift
+    webp_durs = compute_frame_durations_ms(
+        timestamps=[0.0, 0.017, 0.033, 0.050],
+        end_time=0.067,
+        video_format="webp",
+        fps=60,
+    )
+    assert webp_durs == [17, 16, 17, 17]
+
+    # GIF quantizes to 10ms steps with >= 20ms floor so browsers never clamp to 100ms
+    gif_durs = compute_frame_durations_ms(
+        timestamps=[0.0, 0.017, 0.033, 0.050],
+        end_time=0.067,
+        video_format="gif",
+        fps=60,
+    )
+    assert all(d >= 20 and d % 10 == 0 for d in gif_durs)
+
+    raw_frames = [
+        process_captured_image(Image.new("RGB", (200, 100), (24 + i * 30, 80, 200)), scale=0.50)
+        for i in range(3)
+    ]
+    assert all(f.size == (100, 50) for f in raw_frames)
+
+    webp_path = save_recorded_frames(
+        frames=raw_frames,
+        timestamps=[0.0, 0.033, 0.066],
+        end_time=0.100,
+        output_dir=tmp_path,
+        prefix="rec_",
+        video_format="webp",
+        fps=30,
+    )
+    assert webp_path.suffix == ".webp" and webp_path.exists()
+    with Image.open(webp_path) as img:
+        assert img.size == (100, 50)
+        assert getattr(img, "n_frames", 1) == 3
+
+    gif_path = save_recorded_frames(
+        frames=raw_frames,
+        timestamps=[0.0, 0.033, 0.066],
+        end_time=0.100,
+        output_dir=tmp_path,
+        prefix="rec_",
+        video_format="gif",
+        fps=30,
+    )
+    assert gif_path.suffix == ".gif" and gif_path.exists()
+    with Image.open(gif_path) as img:
+        assert img.size == (100, 50)
+        assert getattr(img, "n_frames", 1) == 3
+
+
+def test_overlay_locks_viewport_and_swaps_record_button_while_recording(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    cfg = AppConfig(
+        output_dir=str(tmp_path),
+        box_x=100,
+        box_y=100,
+        box_width=500,
+        box_height=500,
+        scale=1.0,
+        video_format="webp",
+        video_fps=30,
+    )
+    controller = OverlayController()
+    try:
+        controller.show_overlay(cfg)
+        qapp.processEvents()
+        hud = controller.hud_widget
+
+        ready: list[bool] = []
+        controller.enter_recording_mode(lambda: ready.append(True), delay_ms=0)
+        qapp.processEvents()
+
+        assert ready == [True]
+        assert controller.is_recording is True
+        assert hud.is_recording is True
+        assert hud.record_btn.property("recording") is True
+        assert hud.record_btn.isEnabled()
+        assert hud.cancel_btn.isEnabled()
+        assert hud.rec_timer_label.isVisible()
+
+        # Viewport-editing controls are locked on the HUD pill
+        assert not hud.capture_btn.isEnabled()
+        assert not hud.cap_w_spin.isEnabled()
+        assert not hud.cap_h_spin.isEnabled()
+        assert not hud.scale_spin.isEnabled()
+        assert not hud.settings_btn.isEnabled()
+
+        # Dimmed overlays are replaced by click-through border indicators
+        assert len(controller.overlay_widgets) == 0
+        assert len(controller.recording_border_widgets) >= 1
+        assert all(
+            bool(w.windowFlags() & Qt.WindowTransparentForInput)
+            for w in controller.recording_border_widgets
+        )
+
+        # Viewport cannot be moved or resized programmatically while recording
+        locked = controller.box_rect
+        controller.set_box_rect(PhysicalRect(250, 250, 800, 800))
+        controller.nudge_box(20, 20)
+        controller.reset_box_to_default()
+        controller.toggle_square_lock()
+        assert controller.box_rect == locked
+        assert controller.square_lock is False
+    finally:
+        controller.close_overlay()
+        qapp.processEvents()
+
+
+def test_hud_record_and_stop_saves_scaled_webp_clip(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _AnimatedFakeMSS(_FakeMSS):
+        grab_index = 0
+
+        def grab(self, monitor: dict[str, int]) -> SimpleNamespace:
+            _FakeMSS.grabbed_monitors.append(dict(monitor))
+            idx = type(self).grab_index
+            type(self).grab_index += 1
+            w = monitor["width"]
+            h = monitor["height"]
+            b = (10 + idx * 45) % 255
+            return SimpleNamespace(size=(w, h), bgra=bytes([b, 120, 230, 255]) * (w * h))
+
+    cfg_file = tmp_path / "app_config.json"
+    out_dir = tmp_path / "snapshots"
+    _FakeMSS.grabbed_monitors = []
+    monkeypatch.setattr("src.capture.mss.MSS", _AnimatedFakeMSS)
+    monkeypatch.setattr("src.tray.save_config", lambda cfg: save_config(cfg, cfg_file))
+
+    cfg = AppConfig(
+        hotkey="Win+Alt+S",
+        output_dir=str(out_dir),
+        box_x=80,
+        box_y=80,
+        box_width=400,
+        box_height=200,
+        scale=0.50,
+        play_chime=False,
+        video_format="webp",
+        video_fps=30,
+    )
+    app_ctrl = SnapshotterApp(config=cfg, start_bridge=False)
+    try:
+        app_ctrl.on_hotkey_triggered()
+        qapp.processEvents()
+        hud = app_ctrl.overlay_controller.hud_widget
+
+        # Circle record button starts recording after DWM settle
+        hud.record_btn.click()
+        for _ in range(30):
+            qapp.processEvents()
+            if app_ctrl._recorder is not None and app_ctrl._recorder.frame_count >= 2:
+                break
+            ctypes.windll.kernel32.Sleep(20)
+
+        assert app_ctrl.overlay_controller.is_recording is True
+        assert hud.record_btn.property("recording") is True
+        assert app_ctrl._recorder is not None and app_ctrl._recorder.frame_count >= 2
+
+        # Rounded-square stop button stops capture and writes scaled animated WebP
+        hud.record_btn.click()
+        for _ in range(80):
+            qapp.processEvents()
+            if (
+                list(out_dir.glob("capture_*.webp"))
+                and not app_ctrl._saving_recording
+                and not hud.isVisible()
+            ):
+                break
+            ctypes.windll.kernel32.Sleep(25)
+
+        saved_clips = list(out_dir.glob("capture_*.webp"))
+        assert len(saved_clips) == 1
+        with Image.open(saved_clips[0]) as clip:
+            assert clip.size == (200, 100)
+            assert getattr(clip, "n_frames", 1) >= 2
+        assert _FakeMSS.grabbed_monitors[-1] == {
+            "left": 80,
+            "top": 80,
+            "width": 400,
+            "height": 200,
+        }
+    finally:
+        app_ctrl.shutdown()
+        qapp.processEvents()
+
+
+def test_cursor_overlay_rendering_and_recorder_toggle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ctypes.wintypes as wt
+
+    u32 = ctypes.windll.user32
+    u32.LoadCursorW.restype = wt.HCURSOR
+    u32.LoadCursorW.argtypes = [wt.HINSTANCE, wt.LPCWSTR]
+    arrow_handle = int(u32.LoadCursorW(None, ctypes.cast(32512, wt.LPCWSTR)))
+    assert arrow_handle != 0
+
+    rect = PhysicalRect(-100, 50, 200, 150)
+
+    # Cursor inside rect modifies local pixels cleanly
+    monkeypatch.setattr("src.capture._query_win32_cursor_state", lambda: (-40, 100, arrow_handle))
+    img_inside = Image.new("RGB", (200, 150), (30, 80, 140))
+    overlay_cursor_on_image(img_inside, rect)
+    changed_inside = sum(1 for px in img_inside.get_flattened_data() if px != (30, 80, 140))
+    assert changed_inside > 10
+
+    # Cursor straddling the left/top border clips safely and still composites
+    monkeypatch.setattr("src.capture._query_win32_cursor_state", lambda: (-102, 48, arrow_handle))
+    img_edge = Image.new("RGB", (200, 150), (30, 80, 140))
+    overlay_cursor_on_image(img_edge, rect)
+    assert any(px != (30, 80, 140) for px in img_edge.get_flattened_data())
+
+    # Cursor completely outside rect leaves frame untouched
+    monkeypatch.setattr("src.capture._query_win32_cursor_state", lambda: (500, 500, arrow_handle))
+    img_outside = Image.new("RGB", (200, 150), (30, 80, 140))
+    overlay_cursor_on_image(img_outside, rect)
+    assert all(px == (30, 80, 140) for px in img_outside.get_flattened_data())
+
+    # RegionRecorder honors include_cursor=True vs include_cursor=False before scaling
+    monkeypatch.setattr("src.capture.mss.MSS", _FakeMSS)
+    monkeypatch.setattr("src.capture._query_win32_cursor_state", lambda: (-40, 100, arrow_handle))
+
+    rec_with = RegionRecorder(rect=rect, scale=0.5, fps=30, include_cursor=True)
+    rec_with.start()
+    for _ in range(25):
+        if rec_with.frame_count >= 1:
+            break
+        ctypes.windll.kernel32.Sleep(10)
+    frames_with, _, _ = rec_with.stop()
+    assert len(frames_with) >= 1
+    assert frames_with[0].size == (100, 75)
+    assert any(px != (230, 120, 10) for px in frames_with[0].get_flattened_data())
+
+    rec_without = RegionRecorder(rect=rect, scale=0.5, fps=30, include_cursor=False)
+    rec_without.start()
+    for _ in range(25):
+        if rec_without.frame_count >= 1:
+            break
+        ctypes.windll.kernel32.Sleep(10)
+    frames_without, _, _ = rec_without.stop()
+    assert len(frames_without) >= 1
+    assert frames_without[0].size == (100, 75)
+    assert all(px == (230, 120, 10) for px in frames_without[0].get_flattened_data())

@@ -350,10 +350,60 @@ class ScreenOverlayWidget(QWidget):
         super().changeEvent(event)
 
 
+class _RecordingBorderWidget(QWidget):
+    """Click-through locked border drawn strictly outside the recorded pixel region."""
+
+    def __init__(self, controller: OverlayController, mapping: ScreenMapping) -> None:
+        super().__init__(None)
+        self._controller = controller
+        self._mapping = mapping
+
+        self.setWindowFlags(
+            Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.Tool
+            | Qt.WindowTransparentForInput
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setGeometry(
+            mapping.logical_x,
+            mapping.logical_y,
+            mapping.logical_w,
+            mapping.logical_h,
+        )
+
+    def _local_box_rect(self) -> QRectF:
+        lx, ly, lw, lh = self._mapping.physical_rect_to_local_rect(self._controller.box_rect)
+        return QRectF(lx, ly, lw, lh)
+
+    def paintEvent(self, event: object) -> None:
+        box = self._local_box_rect()
+        screen_rect = QRectF(0.0, 0.0, float(self.width()), float(self.height()))
+        border_rect = box.adjusted(-2.5, -2.5, 2.5, 2.5)
+        if not border_rect.intersects(screen_rect.adjusted(-12, -12, 12, 12)):
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+
+        under_pen = QPen(QColor(15, 12, 10, 225), 3.0, Qt.SolidLine)
+        painter.setPen(under_pen)
+        painter.drawRect(border_rect)
+
+        rec_pen = QPen(QColor(224, 90, 79, 245), 2.0, Qt.CustomDashLine)
+        rec_pen.setDashPattern([6.0, 4.0])
+        painter.setPen(rec_pen)
+        painter.drawRect(border_rect)
+
+        painter.end()
+
+
 class OverlayController(QObject):
     """Coordinates multi-monitor overlay windows, the capture box, and the floating HUD pill."""
 
     capture_requested = Signal()
+    record_requested = Signal()
     canceled = Signal()
     settings_requested = Signal()
     state_changed = Signal()
@@ -362,8 +412,11 @@ class OverlayController(QObject):
         super().__init__(parent)
         self._active = False
         self._capturing = False
+        self._recording = False
+        self._saving_recording = False
         self._screen_pairs: list[tuple[QScreen, ScreenMapping]] = []
         self._overlays: list[ScreenOverlayWidget] = []
+        self._recording_borders: list[_RecordingBorderWidget] = []
         self._monitor_rects: list[PhysicalRect] = []
         self._virtual_bounds = PhysicalRect(0, 0, 1920, 1080)
 
@@ -386,6 +439,7 @@ class OverlayController(QObject):
 
         self._hud = FloatingHudWidget()
         self._hud.capture_clicked.connect(self.capture_requested)
+        self._hud.record_clicked.connect(self.record_requested)
         self._hud.capture_size_edited.connect(self._on_hud_capture_size_edited)
         self._hud.scale_edited.connect(self._on_hud_scale_edited)
         self._hud.settings_clicked.connect(self._on_hud_settings_clicked)
@@ -398,6 +452,18 @@ class OverlayController(QObject):
     @property
     def is_capturing(self) -> bool:
         return self._capturing
+
+    @property
+    def is_recording(self) -> bool:
+        return self._recording
+
+    @property
+    def is_saving_recording(self) -> bool:
+        return self._saving_recording
+
+    @property
+    def recording_border_widgets(self) -> list[_RecordingBorderWidget]:
+        return list(self._recording_borders)
 
     @property
     def box_rect(self) -> PhysicalRect:
@@ -435,13 +501,18 @@ class OverlayController(QObject):
         """Build fresh monitor mappings, restore box & settings from config, and show overlay."""
         self.clear_held_arrows()
         self._teardown_overlays()
+        self._teardown_recording_borders()
         self._capturing = False
+        self._recording = False
+        self._saving_recording = False
 
         self._default_w = config.default_width
         self._default_h = config.default_height
         self._square_lock = config.square_lock
         self._scale = config.scale
         self._opacity = config.overlay_opacity
+        self._hud.set_video_preferences(config.video_format, config.video_fps)
+        self._hud.set_recording_state(False, saving=False)
 
         self._screen_pairs = build_screen_mappings()
         self._monitor_rects = [mapping.physical for _, mapping in self._screen_pairs]
@@ -492,7 +563,7 @@ class OverlayController(QObject):
         return centered_rect_in(target_mon, width, height)
 
     def set_box_rect(self, rect: PhysicalRect) -> None:
-        if rect == self._box_rect:
+        if self._recording or self._saving_recording or rect == self._box_rect:
             return
         self._box_rect = rect
         self.update_all_screens()
@@ -501,6 +572,8 @@ class OverlayController(QObject):
         self.state_changed.emit()
 
     def nudge_box(self, dx: int, dy: int) -> None:
+        if self._recording or self._saving_recording:
+            return
         moved = clamp_box_to_monitors(self._box_rect.translated(dx, dy), self._monitor_rects)
         self.set_box_rect(moved)
 
@@ -542,6 +615,8 @@ class OverlayController(QObject):
         self.nudge_box(dx * step, dy * step)
 
     def reset_box_to_default(self) -> None:
+        if self._recording or self._saving_recording:
+            return
         w = self._default_w
         h = self._default_h
         x = self._box_rect.center_x - w // 2
@@ -550,13 +625,19 @@ class OverlayController(QObject):
         self.set_box_rect(reset_rect)
 
     def toggle_square_lock(self) -> None:
+        if self._recording or self._saving_recording:
+            return
         self.set_square_lock(not self._square_lock)
 
     def set_square_lock(self, locked: bool) -> None:
+        if self._recording or self._saving_recording:
+            return
         self._square_lock = bool(locked)
         self.state_changed.emit()
 
     def _on_hud_capture_size_edited(self, width: int, height: int) -> None:
+        if self._recording or self._saving_recording:
+            return
         target_w = max(DEFAULT_MIN_SIZE, int(width))
         target_h = max(DEFAULT_MIN_SIZE, int(height))
         x = self._box_rect.center_x - target_w // 2
@@ -568,16 +649,22 @@ class OverlayController(QObject):
         self.set_box_rect(resized)
 
     def _on_hud_scale_edited(self, scale: float) -> None:
+        if self._recording or self._saving_recording:
+            return
         self._scale = round(max(MIN_SCALE, min(MAX_SCALE, float(scale))), 2)
         self._sync_hud()
         self.state_changed.emit()
 
     def _on_hud_settings_clicked(self) -> None:
+        if self._recording or self._saving_recording:
+            return
         self.close_overlay()
         self.settings_requested.emit()
 
     def cancel(self) -> None:
-        if not self._active:
+        if self._saving_recording:
+            return
+        if not self._active and not self._recording:
             return
         self.close_overlay()
         self.canceled.emit()
@@ -593,11 +680,14 @@ class OverlayController(QObject):
 
     def apply_config(self, config: AppConfig) -> None:
         """Push updated config settings into the currently visible overlay and HUD."""
+        if self._recording or self._saving_recording:
+            return
         self._default_w = config.default_width
         self._default_h = config.default_height
         self._square_lock = config.square_lock
         self._scale = config.scale
         self._opacity = config.overlay_opacity
+        self._hud.set_video_preferences(config.video_format, config.video_fps)
 
         if self._active:
             target_w = max(DEFAULT_MIN_SIZE, config.box_width)
@@ -638,20 +728,77 @@ class OverlayController(QObject):
             QTimer.singleShot(delay_ms, _finish)
         return captured_rect
 
-    def close_overlay(self) -> None:
-        """Hide and tear down all overlay windows and the HUD pill."""
+    def enter_recording_mode(self, on_ready: Callable[[], None], delay_ms: int = 45) -> PhysicalRect:
+        """Lock viewport geometry, show click-through recording border, and start recording after DWM settles."""
         self.clear_held_arrows()
         self._hud.commit_pending_edits()
+        self._recording = True
+        self._saving_recording = False
+        self._capturing = False
+        locked_rect = self._box_rect
+
+        self._teardown_recording_borders()
+        for _qscreen, mapping in self._screen_pairs:
+            border = _RecordingBorderWidget(self, mapping)
+            border.show()
+            self._recording_borders.append(border)
+
+        for overlay in self._overlays:
+            overlay.hide()
+        self._teardown_overlays()
+
+        self._hud.set_recording_state(recording=True, elapsed_seconds=0.0, saving=False)
+        self._position_hud()
+        self._hud.raise_()
+        QApplication.processEvents()
+
+        def _finish() -> None:
+            if self._recording:
+                on_ready()
+
+        if delay_ms <= 0:
+            _finish()
+        else:
+            QTimer.singleShot(delay_ms, _finish)
+        return locked_rect
+
+    def update_recording_elapsed(self, elapsed_seconds: float) -> None:
+        if self._recording:
+            self._hud.update_recording_elapsed(elapsed_seconds)
+
+    def enter_recording_saving(self) -> None:
+        """Remove recording borders and lock the HUD briefly while encoding finishes."""
+        self._recording = False
+        self._saving_recording = True
+        self._teardown_recording_borders()
+        self._hud.set_recording_state(recording=False, saving=True)
+        self._position_hud()
+        self._hud.raise_()
+
+    def close_overlay(self) -> None:
+        """Hide and tear down all overlay windows, recording borders, and the HUD pill."""
+        self.clear_held_arrows()
+        self._hud.commit_pending_edits()
+        self._hud.set_recording_state(recording=False, saving=False)
         self._hud.hide()
         self._teardown_overlays()
+        self._teardown_recording_borders()
         self._active = False
         self._capturing = False
+        self._recording = False
+        self._saving_recording = False
 
     def _teardown_overlays(self) -> None:
         for overlay in self._overlays:
             overlay.hide()
             overlay.deleteLater()
         self._overlays.clear()
+
+    def _teardown_recording_borders(self) -> None:
+        for border in self._recording_borders:
+            border.hide()
+            border.deleteLater()
+        self._recording_borders.clear()
 
     def update_all_screens(self) -> None:
         for overlay in self._overlays:
@@ -697,7 +844,7 @@ class OverlayController(QObject):
         self._hud.raise_()
 
     def raise_hud(self) -> None:
-        if self._active and self._hud.isVisible():
+        if (self._active or self._recording or self._saving_recording) and self._hud.isVisible():
             self._hud.raise_()
 
     def _find_pair_for_box(self) -> tuple[QScreen, ScreenMapping]:

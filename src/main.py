@@ -80,7 +80,8 @@ def _run_self_check(app: QApplication, output_path: Path | None) -> int:
 
         hud = FloatingHudWidget()
         svg_icons_ok = all(
-            not btn.icon().isNull() for btn in (hud.capture_btn, hud.settings_btn, hud.cancel_btn)
+            not btn.icon().isNull()
+            for btn in (hud.capture_btn, hud.record_btn, hud.settings_btn, hud.cancel_btn)
         )
         hud.close()
         hud.deleteLater()

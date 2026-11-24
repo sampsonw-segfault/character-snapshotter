@@ -22,6 +22,11 @@ DEFAULT_HOTKEY = "Win+Alt+S"
 DEFAULT_BRIDGE_PORT = 47821
 MIN_BRIDGE_PORT = 1024
 MAX_BRIDGE_PORT = 65535
+DEFAULT_VIDEO_FORMAT = "webp"
+SUPPORTED_VIDEO_FORMATS = ("webp", "gif")
+DEFAULT_VIDEO_FPS = 30
+MIN_VIDEO_FPS = 5
+MAX_VIDEO_FPS = 60
 
 
 class CaptureMode(str, Enum):
@@ -54,6 +59,9 @@ class AppConfig:
     overlay_opacity: float = 0.45
     play_chime: bool = True
     capture_mode: str = CaptureMode.BOX.value
+    video_format: str = DEFAULT_VIDEO_FORMAT
+    video_fps: int = DEFAULT_VIDEO_FPS
+    record_cursor: bool = True
     bridge_enabled: bool = False
     bridge_port: int = DEFAULT_BRIDGE_PORT
 
@@ -113,6 +121,9 @@ def validate_config(cfg: AppConfig) -> AppConfig:
     valid_modes = {mode.value for mode in CaptureMode}
     capture_mode = cfg.capture_mode if cfg.capture_mode in valid_modes else CaptureMode.BOX.value
 
+    raw_video_fmt = cfg.video_format.strip().lower() if isinstance(cfg.video_format, str) else ""
+    video_format = raw_video_fmt if raw_video_fmt in SUPPORTED_VIDEO_FORMATS else DEFAULT_VIDEO_FORMAT
+
     return AppConfig(
         hotkey=hotkey,
         output_dir=output_dir,
@@ -128,6 +139,9 @@ def validate_config(cfg: AppConfig) -> AppConfig:
         overlay_opacity=_coerce_float(cfg.overlay_opacity, defaults.overlay_opacity, MIN_OPACITY, MAX_OPACITY),
         play_chime=bool(cfg.play_chime),
         capture_mode=capture_mode,
+        video_format=video_format,
+        video_fps=_coerce_int(cfg.video_fps, defaults.video_fps, MIN_VIDEO_FPS, MAX_VIDEO_FPS),
+        record_cursor=bool(cfg.record_cursor),
         bridge_enabled=bool(cfg.bridge_enabled),
         bridge_port=_coerce_int(cfg.bridge_port, defaults.bridge_port, MIN_BRIDGE_PORT, MAX_BRIDGE_PORT),
     )

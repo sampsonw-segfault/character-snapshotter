@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, QRectF, Qt, QTimer
+from PySide6.QtCore import QObject, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QSystemTrayIcon
 
 from src.bridge import BridgeCallbacks, LocalBridgeServer, config_to_bridge_dict
-from src.capture import capture_region_to_file, play_capture_chime
+from src.capture import (
+    RegionRecorder,
+    capture_region_to_file,
+    play_capture_chime,
+    save_recorded_frames,
+)
 from src.config import AppConfig, load_config, save_config, validate_config
 from src.geometry import compute_scaled_output_size
 from src.hotkey import GlobalHotkeyManager
@@ -34,6 +40,9 @@ _REMOTE_PATCHABLE_FIELDS = {
     "scale",
     "overlay_opacity",
     "play_chime",
+    "video_format",
+    "video_fps",
+    "record_cursor",
 }
 
 
@@ -87,6 +96,10 @@ def create_tray_icon() -> QIcon:
 class SnapshotterApp(QObject):
     """Coordinates system tray icon, global hotkey, overlay controller, settings, and bridge."""
 
+    _recording_limit_signal = Signal()
+    _recording_error_signal = Signal(str)
+    _recording_saved_signal = Signal(object)
+
     def __init__(
         self,
         config: AppConfig | None = None,
@@ -99,6 +112,8 @@ class SnapshotterApp(QObject):
         self._hotkey_manager = GlobalHotkeyManager(self)
         self._overlay = OverlayController(self)
         self._settings_dialog: SettingsDialog | None = None
+        self._recorder: RegionRecorder | None = None
+        self._saving_recording = False
 
         self._bridge = LocalBridgeServer(
             BridgeCallbacks(
@@ -117,8 +132,17 @@ class SnapshotterApp(QObject):
         self._state_broadcast_timer.setInterval(120)
         self._state_broadcast_timer.timeout.connect(self._on_debounced_overlay_state_changed)
 
+        self._rec_timer = QTimer(self)
+        self._rec_timer.setInterval(250)
+        self._rec_timer.timeout.connect(self._on_recording_timer_tick)
+
+        self._recording_limit_signal.connect(self._on_recording_limit_reached, Qt.QueuedConnection)
+        self._recording_error_signal.connect(self._on_recording_error, Qt.QueuedConnection)
+        self._recording_saved_signal.connect(self._on_recording_saved, Qt.QueuedConnection)
+
         self._hotkey_manager.triggered.connect(self.on_hotkey_triggered)
         self._overlay.capture_requested.connect(self._on_overlay_capture_requested)
+        self._overlay.record_requested.connect(self._on_overlay_record_requested)
         self._overlay.canceled.connect(self._on_overlay_canceled)
         self._overlay.settings_requested.connect(self.open_settings)
         self._overlay.state_changed.connect(self._state_broadcast_timer.start)
@@ -233,7 +257,12 @@ class SnapshotterApp(QObject):
             self._bridge.broadcast_status(self._bridge.build_status_payload())
 
     def _on_debounced_overlay_state_changed(self) -> None:
-        if not self._overlay.is_active or self._overlay.is_capturing:
+        if (
+            not self._overlay.is_active
+            or self._overlay.is_capturing
+            or self._overlay.is_recording
+            or self._overlay.is_saving_recording
+        ):
             return
         self._overlay.write_state_to_config(self._config)
         save_config(self._config)
@@ -244,7 +273,11 @@ class SnapshotterApp(QObject):
             self.open_settings()
 
     def _on_menu_trigger(self) -> None:
-        if self._settings_dialog is not None:
+        if (
+            self._settings_dialog is not None
+            or self._overlay.is_recording
+            or self._saving_recording
+        ):
             return
         if not self._overlay.is_active:
             self._overlay.show_overlay(self._config)
@@ -252,8 +285,16 @@ class SnapshotterApp(QObject):
                 self._bridge.broadcast_overlay_state(True)
 
     def on_hotkey_triggered(self) -> None:
-        """Toggle between opening the framing overlay and snapping the framed region."""
-        if self._settings_dialog is not None or self._overlay.is_capturing:
+        """Toggle between opening the overlay, stopping an active recording, or snapping a PNG."""
+        if (
+            self._settings_dialog is not None
+            or self._overlay.is_capturing
+            or self._saving_recording
+        ):
+            return
+
+        if self._overlay.is_recording:
+            self._stop_recording(save=True)
             return
 
         if not self._overlay.is_active:
@@ -265,8 +306,160 @@ class SnapshotterApp(QObject):
         self._capture_active_overlay()
 
     def _on_overlay_capture_requested(self) -> None:
-        if self._settings_dialog is None and self._overlay.is_active and not self._overlay.is_capturing:
+        if (
+            self._settings_dialog is None
+            and self._overlay.is_active
+            and not self._overlay.is_capturing
+            and not self._overlay.is_recording
+            and not self._saving_recording
+        ):
             self._capture_active_overlay()
+
+    def _on_overlay_record_requested(self) -> None:
+        if (
+            self._settings_dialog is not None
+            or self._overlay.is_capturing
+            or self._saving_recording
+        ):
+            return
+        if self._overlay.is_recording:
+            self._stop_recording(save=True)
+        elif self._overlay.is_active:
+            self._start_recording()
+
+    def _start_recording(self) -> None:
+        self._state_broadcast_timer.stop()
+        self._overlay.hud_widget.commit_pending_edits()
+        self._overlay.write_state_to_config(self._config)
+        save_config(self._config)
+
+        rect = self._overlay.box_rect
+        scale = self._overlay.scale
+        fps = self._config.video_fps
+        include_cursor = self._config.record_cursor
+
+        recorder = RegionRecorder(
+            rect=rect,
+            scale=scale,
+            fps=fps,
+            include_cursor=include_cursor,
+            on_limit_reached=self._recording_limit_signal.emit,
+            on_error=self._recording_error_signal.emit,
+        )
+        self._recorder = recorder
+
+        def _begin() -> None:
+            if self._recorder is recorder and self._overlay.is_recording:
+                recorder.start()
+                self._rec_timer.start()
+
+        self._tray.setToolTip(f"Character Snapshotter ({self._config.hotkey}) - Recording...")
+        self._overlay.enter_recording_mode(_begin)
+
+    def _on_recording_timer_tick(self) -> None:
+        if self._recorder is not None and self._overlay.is_recording:
+            self._overlay.update_recording_elapsed(self._recorder.elapsed_seconds)
+
+    def _stop_recording(self, save: bool = True) -> None:
+        self._rec_timer.stop()
+        recorder = self._recorder
+        self._recorder = None
+        if recorder is None:
+            self._overlay.close_overlay()
+            self._refresh_tray_labels()
+            return
+
+        if not save:
+            recorder.cancel()
+            self._refresh_tray_labels()
+            return
+
+        frames, timestamps, end_time = recorder.stop()
+        if not frames:
+            err = recorder.last_error or "No video frames were captured."
+            self._overlay.close_overlay()
+            self._refresh_tray_labels()
+            if self._bridge.is_running:
+                self._bridge.broadcast_overlay_state(False)
+            self._tray.showMessage(
+                "Character Snapshotter",
+                f"Recording failed: {err}",
+                QSystemTrayIcon.Critical,
+                4000,
+            )
+            return
+
+        self._saving_recording = True
+        self._overlay.enter_recording_saving()
+        self._tray.setToolTip(f"Character Snapshotter ({self._config.hotkey}) - Saving recording...")
+
+        output_dir = Path(self._config.output_dir)
+        prefix = self._config.filename_prefix
+        video_format = self._config.video_format
+        fps = self._config.video_fps
+
+        def _save_worker() -> None:
+            try:
+                out_path = save_recorded_frames(
+                    frames=frames,
+                    timestamps=timestamps,
+                    end_time=end_time,
+                    output_dir=output_dir,
+                    prefix=prefix,
+                    video_format=video_format,
+                    fps=fps,
+                )
+                self._recording_saved_signal.emit((out_path, None))
+            except Exception as exc:  # noqa: BLE001
+                self._recording_saved_signal.emit((None, str(exc)))
+
+        threading.Thread(target=_save_worker, name="SnapshotterVideoSave", daemon=True).start()
+
+    def _on_recording_saved(self, result: object) -> None:
+        self._saving_recording = False
+        self._overlay.close_overlay()
+        if self._bridge.is_running:
+            self._bridge.broadcast_overlay_state(False)
+
+        out_path, err_msg = result  # type: ignore[misc]
+        if err_msg is not None or out_path is None:
+            self._refresh_tray_labels()
+            self._tray.showMessage(
+                "Character Snapshotter",
+                f"Recording failed: {err_msg}",
+                QSystemTrayIcon.Critical,
+                4000,
+            )
+            return
+
+        if self._config.play_chime:
+            play_capture_chime()
+        self._tray.setToolTip(
+            f"Character Snapshotter ({self._config.hotkey}) - Last: {out_path.name}"
+        )
+
+    def _on_recording_limit_reached(self) -> None:
+        if self._recorder is not None:
+            self._stop_recording(save=True)
+            self._tray.showMessage(
+                "Character Snapshotter",
+                "Recording buffer limit reached; saving clip.",
+                QSystemTrayIcon.Information,
+                3500,
+            )
+
+    def _on_recording_error(self, err: str) -> None:
+        if self._recorder is not None:
+            self._stop_recording(save=False)
+            self._overlay.close_overlay()
+            if self._bridge.is_running:
+                self._bridge.broadcast_overlay_state(False)
+            self._tray.showMessage(
+                "Character Snapshotter",
+                f"Recording failed: {err}",
+                QSystemTrayIcon.Critical,
+                4000,
+            )
 
     def _capture_active_overlay(self) -> None:
         self._state_broadcast_timer.stop()
@@ -317,6 +510,11 @@ class SnapshotterApp(QObject):
 
     def _on_overlay_canceled(self) -> None:
         self._state_broadcast_timer.stop()
+        self._rec_timer.stop()
+        if self._recorder is not None:
+            self._recorder.cancel()
+            self._recorder = None
+            self._refresh_tray_labels()
         self._overlay.write_state_to_config(self._config)
         save_config(self._config)
         if self._bridge.is_running:
@@ -371,7 +569,12 @@ class SnapshotterApp(QObject):
 
     def trigger_remote_action(self, action: str) -> tuple[bool, str, bool]:
         """Execute an overlay/capture trigger action sent from the localhost bridge."""
-        if self._settings_dialog is not None or self._overlay.is_capturing:
+        if (
+            self._settings_dialog is not None
+            or self._overlay.is_capturing
+            or self._overlay.is_recording
+            or self._saving_recording
+        ):
             return (False, "Overlay is busy or Settings dialog is open.", self._overlay.is_active)
 
         normalized = action.strip().lower()
@@ -423,6 +626,8 @@ class SnapshotterApp(QObject):
 
     def open_settings(self) -> None:
         """Open the modal Settings dialog while pausing the active global hotkey."""
+        if self._overlay.is_recording or self._saving_recording:
+            return
         if self._settings_dialog is not None:
             self._settings_dialog.raise_()
             self._settings_dialog.activateWindow()
@@ -474,10 +679,18 @@ class SnapshotterApp(QObject):
             os.startfile(str(target))  # noqa: S606
 
     def shutdown(self) -> None:
-        """Cleanly stop bridge, close overlays, release hotkey, and hide tray icon."""
+        """Cleanly stop bridge, recording, overlays, release hotkey, and hide tray icon."""
         self._state_broadcast_timer.stop()
+        self._rec_timer.stop()
+        if self._recorder is not None:
+            self._recorder.cancel()
+            self._recorder = None
         self._bridge.stop()
-        if self._overlay.is_active:
+        if (
+            self._overlay.is_active
+            or self._overlay.is_recording
+            or self._overlay.is_saving_recording
+        ):
             self._overlay.close_overlay()
         self._hotkey_manager.dispose()
         self._tray.hide()
