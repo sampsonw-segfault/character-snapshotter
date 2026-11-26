@@ -775,6 +775,11 @@ class OverlayController(QObject):
         self._position_hud()
         self._hud.raise_()
 
+    def update_saving_progress(self, encoded: int, total: int) -> None:
+        if self._saving_recording:
+            self._hud.update_saving_progress(encoded, total)
+            self._position_hud()
+
     def close_overlay(self) -> None:
         """Hide and tear down all overlay windows, recording borders, and the HUD pill."""
         self.clear_held_arrows()

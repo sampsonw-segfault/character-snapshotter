@@ -21,6 +21,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from src.capture import (
     RegionRecorder,
+    _FrameSpool,
     capture_region_to_file,
     compute_frame_durations_ms,
     generate_timestamp_path,
@@ -1053,3 +1054,86 @@ def test_cursor_overlay_rendering_and_recorder_toggle(
     assert len(frames_without) >= 1
     assert frames_without[0].size == (100, 75)
     assert all(px == (230, 120, 10) for px in frames_without[0].get_flattened_data())
+
+
+def test_frame_spool_ram_to_disk_overflow_fifo_and_cleanup() -> None:
+    # 50x40 RGB = 6,000 bytes per frame -> max 2 frames fit in 13,000-byte RAM budget
+    spool = _FrameSpool(max_ram_bytes=13_000, max_disk_bytes=1_000_000, min_free_disk_bytes=0)
+    spool_path: Path | None = None
+    try:
+        for i in range(5):
+            assert spool.push(Image.new("RGB", (50, 40), (i * 40, 20, 180)), timestamp=i * 0.03) is True
+        spool_path = spool.spool_path
+        assert spool_path is not None and spool_path.exists()
+        assert spool.disk_spill_events == 1
+
+        # Drain all 5 frames in strict FIFO order; draining resets disk spool back to empty
+        drained = []
+        for _ in range(5):
+            item = spool.pop(wait=False)
+            assert item is not None
+            img, ts = item
+            drained.append((img.getpixel((0, 0))[0], round(ts, 2)))
+        assert drained == [(0, 0.0), (40, 0.03), (80, 0.06), (120, 0.09), (160, 0.12)]
+        assert spool_path.stat().st_size == 0
+
+        # Next frame fits cleanly back into zero-disk RAM queue
+        assert spool.push(Image.new("RGB", (50, 40), (222, 10, 10)), timestamp=0.15) is True
+        assert spool_path.stat().st_size == 0
+        last_item = spool.pop(wait=False)
+        assert last_item is not None and last_item[0].getpixel((0, 0))[0] == 222
+    finally:
+        spool.cleanup()
+
+    assert spool_path is not None and not spool_path.exists()
+
+
+def test_live_webp_encoder_with_disk_spillover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _VaryingMSS:
+        idx = 0
+
+        def __enter__(self) -> _VaryingMSS:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def grab(self, monitor: dict[str, int]) -> SimpleNamespace:
+            i = type(self).idx
+            type(self).idx += 1
+            w = monitor["width"]
+            h = monitor["height"]
+            return SimpleNamespace(size=(w, h), bgra=bytes([(i * 53) % 255, 110, 220, 255]) * (w * h))
+
+    monkeypatch.setattr("src.capture.mss.MSS", _VaryingMSS)
+    # Force spill to %TEMP% by keeping RAM budget at 0 bytes while live WebP encoder drains
+    rec = RegionRecorder(
+        rect=PhysicalRect(0, 0, 200, 100),
+        scale=1.0,
+        fps=60,
+        include_cursor=False,
+        video_format="webp",
+        live_encode=True,
+        max_ram_bytes=0,
+    )
+    progress_calls: list[tuple[int, int]] = []
+    rec.start()
+    for _ in range(40):
+        if rec.frame_count >= 5:
+            break
+        ctypes.windll.kernel32.Sleep(15)
+
+    assert rec.disk_spill_events >= 1
+    out_path = rec.finish_and_save(
+        output_dir=tmp_path,
+        prefix="stream_",
+        on_progress=lambda done, total: progress_calls.append((done, total)),
+    )
+    assert out_path.suffix == ".webp" and out_path.exists()
+    with Image.open(out_path) as clip:
+        assert clip.size == (200, 100)
+        assert getattr(clip, "n_frames", 1) >= 2
+    assert len(progress_calls) >= 1 and progress_calls[-1][0] == progress_calls[-1][1]
+    assert rec._spool.spool_path is None

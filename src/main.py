@@ -73,10 +73,13 @@ def _run_self_check(app: QApplication, output_path: Path | None) -> int:
     try:
         import mss
         import PIL
+        from PIL import _webp
 
         from src.config import AppConfig, get_config_path
         from src.hud_pill import FloatingHudWidget
         from src.settings_dialog import SettingsDialog
+
+        webp_stream_ok = hasattr(_webp, "WebPAnimEncoder")
 
         hud = FloatingHudWidget()
         svg_icons_ok = all(
@@ -92,13 +95,14 @@ def _run_self_check(app: QApplication, output_path: Path | None) -> int:
         dlg.deleteLater()
 
         report = {
-            "ok": bool(svg_icons_ok and settings_dialog_ok),
+            "ok": bool(svg_icons_ok and settings_dialog_ok and webp_stream_ok),
             "version": __version__,
             "frozen": bool(getattr(sys, "frozen", False)),
             "config_path": str(get_config_path()),
             "qt_platform": app.platformName(),
             "svg_icons_ok": bool(svg_icons_ok),
             "settings_dialog_ok": bool(settings_dialog_ok),
+            "webp_stream_ok": bool(webp_stream_ok),
             "mss_version": getattr(mss, "__version__", ""),
             "pillow_version": getattr(PIL, "__version__", ""),
         }

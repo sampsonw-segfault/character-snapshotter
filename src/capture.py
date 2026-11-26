@@ -3,20 +3,28 @@
 from __future__ import annotations
 
 import ctypes
+import shutil
+import struct
 import sys
+import tempfile
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 import mss
-from PIL import Image
+from PIL import Image, _webp
 
 from src.geometry import PhysicalRect, compute_scaled_output_size
 
 
-DEFAULT_MAX_RECORDING_BUFFER_BYTES = 1_500_000_000
+DEFAULT_MAX_RAM_BUFFER_BYTES = 96_000_000
+DEFAULT_MAX_RECORDING_BUFFER_BYTES = DEFAULT_MAX_RAM_BUFFER_BYTES
+DEFAULT_MAX_SPOOL_DISK_BYTES = 6_000_000_000
+DEFAULT_MIN_FREE_DISK_BYTES = 1_000_000_000
+_SPOOL_HEADER = struct.Struct("<dIII")
 _CURSOR_SHOWING = 0x00000001
 _DI_NORMAL = 0x0003
 
@@ -382,8 +390,205 @@ def save_recorded_frames(
     return out_path
 
 
+def _read_exact(fp: object, nbytes: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = nbytes
+    while remaining > 0:
+        chunk = fp.read(remaining)  # type: ignore[attr-defined]
+        if not chunk:
+            raise EOFError("Unexpected end of temporary recording spool file.")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+class _FrameSpool:
+    """Thread-safe FIFO keeping frames in RAM up to a budget, spilling overflow to a temp file."""
+
+    def __init__(
+        self,
+        max_ram_bytes: int = DEFAULT_MAX_RAM_BUFFER_BYTES,
+        max_disk_bytes: int = DEFAULT_MAX_SPOOL_DISK_BYTES,
+        min_free_disk_bytes: int = DEFAULT_MIN_FREE_DISK_BYTES,
+    ) -> None:
+        self._max_ram_bytes = max(0, int(max_ram_bytes))
+        self._max_disk_bytes = max(1_000_000, int(max_disk_bytes))
+        self._min_free_disk_bytes = max(0, int(min_free_disk_bytes))
+
+        self._cond = threading.Condition()
+        self._ram_queue: deque[tuple[Image.Image, float]] = deque()
+        self._ram_bytes = 0
+        self._total_pushed = 0
+        self._disk_pending = 0
+        self._disk_written_total = 0
+        self._disk_spill_events = 0
+
+        self._spool_path: Path | None = None
+        self._write_fp: object | None = None
+        self._read_fp: object | None = None
+        self._write_pos = 0
+        self._read_pos = 0
+        self._disk_bytes = 0
+        self._next_disk_check_bytes = 0
+
+        self._eof = False
+        self._closed = False
+
+    @property
+    def total_pushed(self) -> int:
+        with self._cond:
+            return self._total_pushed
+
+    @property
+    def disk_spill_events(self) -> int:
+        with self._cond:
+            return self._disk_spill_events
+
+    @property
+    def spool_path(self) -> Path | None:
+        with self._cond:
+            return self._spool_path
+
+    def _ensure_spool_open_locked(self) -> None:
+        if self._write_fp is not None:
+            return
+        tmp = tempfile.NamedTemporaryFile(prefix="csnap_spool_", suffix=".bin", delete=False)
+        path = Path(tmp.name)
+        tmp.close()
+        self._spool_path = path
+        self._write_fp = path.open("wb")
+        self._read_fp = path.open("rb")
+        self._write_pos = 0
+        self._read_pos = 0
+        self._disk_bytes = 0
+        self._next_disk_check_bytes = 0
+
+    def _reset_spool_locked(self) -> None:
+        if self._write_fp is not None and self._read_fp is not None:
+            self._write_fp.seek(0)  # type: ignore[attr-defined]
+            self._write_fp.truncate(0)  # type: ignore[attr-defined]
+            self._write_fp.flush()  # type: ignore[attr-defined]
+            self._read_fp.seek(0)  # type: ignore[attr-defined]
+        self._write_pos = 0
+        self._read_pos = 0
+        self._disk_bytes = 0
+        self._next_disk_check_bytes = 0
+
+    def _has_disk_headroom_locked(self, needed: int) -> bool:
+        if self._disk_bytes + needed > self._max_disk_bytes:
+            return False
+        if self._min_free_disk_bytes > 0 and self._disk_bytes >= self._next_disk_check_bytes:
+            assert self._spool_path is not None
+            free = shutil.disk_usage(self._spool_path.parent).free
+            if free - needed < self._min_free_disk_bytes:
+                return False
+            self._next_disk_check_bytes = self._disk_bytes + 100_000_000
+        return True
+
+    def push(self, img: Image.Image, timestamp: float) -> bool:
+        """Enqueue a frame in RAM or spill to disk if RAM queue is full and not caught up."""
+        rgb_img = img if img.mode == "RGB" else img.convert("RGB")
+        est_bytes = rgb_img.width * rgb_img.height * 3
+
+        with self._cond:
+            if self._closed:
+                return False
+            if self._disk_pending == 0 and (
+                self._ram_bytes + est_bytes <= self._max_ram_bytes
+                or (self._total_pushed == 0 and self._max_ram_bytes >= est_bytes)
+            ):
+                self._ram_queue.append((rgb_img, float(timestamp)))
+                self._ram_bytes += est_bytes
+                self._total_pushed += 1
+                self._cond.notify_all()
+                return True
+
+            self._ensure_spool_open_locked()
+            payload = rgb_img.tobytes()
+            record_bytes = _SPOOL_HEADER.size + len(payload)
+            if not self._has_disk_headroom_locked(record_bytes):
+                return False
+
+            header = _SPOOL_HEADER.pack(
+                float(timestamp),
+                rgb_img.width,
+                rgb_img.height,
+                len(payload),
+            )
+            assert self._write_fp is not None
+            self._write_fp.seek(self._write_pos)  # type: ignore[attr-defined]
+            self._write_fp.write(header)  # type: ignore[attr-defined]
+            self._write_fp.write(payload)  # type: ignore[attr-defined]
+            self._write_fp.flush()  # type: ignore[attr-defined]
+            self._write_pos += record_bytes
+            self._disk_bytes += record_bytes
+            self._disk_pending += 1
+            self._disk_written_total += 1
+            if self._disk_pending == 1:
+                self._disk_spill_events += 1
+            self._total_pushed += 1
+            self._cond.notify_all()
+            return True
+
+    def pop(self, wait: bool = True) -> tuple[Image.Image, float] | None:
+        """Pop the oldest frame in strict FIFO order across RAM queue and disk spool."""
+        with self._cond:
+            while not self._ram_queue and self._disk_pending == 0:
+                if not wait or self._closed or self._eof:
+                    return None
+                self._cond.wait(timeout=0.15)
+
+            if self._ram_queue:
+                img, ts = self._ram_queue.popleft()
+                self._ram_bytes = max(0, self._ram_bytes - img.width * img.height * 3)
+                return (img, ts)
+
+            assert self._read_fp is not None
+            self._read_fp.seek(self._read_pos)  # type: ignore[attr-defined]
+            hdr_bytes = _read_exact(self._read_fp, _SPOOL_HEADER.size)
+            ts, width, height, payload_len = _SPOOL_HEADER.unpack(hdr_bytes)
+            payload = _read_exact(self._read_fp, payload_len)
+            self._read_pos += _SPOOL_HEADER.size + payload_len
+            self._disk_pending -= 1
+            if self._disk_pending == 0:
+                self._reset_spool_locked()
+            img = Image.frombytes("RGB", (width, height), payload)
+            return (img, ts)
+
+    def mark_eof(self) -> None:
+        with self._cond:
+            self._eof = True
+            self._cond.notify_all()
+
+    def cleanup(self) -> None:
+        with self._cond:
+            self._closed = True
+            self._ram_queue.clear()
+            self._ram_bytes = 0
+            self._disk_pending = 0
+            write_fp = self._write_fp
+            read_fp = self._read_fp
+            spool_path = self._spool_path
+            self._write_fp = None
+            self._read_fp = None
+            self._spool_path = None
+            self._cond.notify_all()
+
+        for fp in (read_fp, write_fp):
+            if fp is not None:
+                try:
+                    fp.close()  # type: ignore[attr-defined]
+                except OSError:
+                    pass
+        if spool_path is not None:
+            try:
+                spool_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 class RegionRecorder:
-    """Captures physical screen frames in a locked region on a background thread."""
+    """Captures physical screen frames with bounded RAM queue, disk overflow, and live WebP encoding."""
 
     def __init__(
         self,
@@ -391,7 +596,10 @@ class RegionRecorder:
         scale: float = 1.0,
         fps: int = 30,
         include_cursor: bool = True,
-        max_buffer_bytes: int = DEFAULT_MAX_RECORDING_BUFFER_BYTES,
+        video_format: str = "webp",
+        live_encode: bool = False,
+        max_ram_bytes: int = DEFAULT_MAX_RAM_BUFFER_BYTES,
+        max_disk_bytes: int = DEFAULT_MAX_SPOOL_DISK_BYTES,
         on_limit_reached: Callable[[], None] | None = None,
         on_error: Callable[[str], None] | None = None,
     ) -> None:
@@ -399,24 +607,36 @@ class RegionRecorder:
         self._scale = float(scale)
         self._fps = max(1, int(fps))
         self._include_cursor = bool(include_cursor)
-        self._max_buffer_bytes = max(1_000_000, int(max_buffer_bytes))
+        self._video_format = video_format.strip().lower()
+        if self._video_format not in ("webp", "gif"):
+            self._video_format = "webp"
+        self._live_webp = bool(live_encode) and self._video_format == "webp"
         self._on_limit_reached = on_limit_reached
         self._on_error = on_error
 
+        self._spool = _FrameSpool(
+            max_ram_bytes=max_ram_bytes,
+            max_disk_bytes=max_disk_bytes,
+        )
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._frames: list[Image.Image] = []
-        self._timestamps: list[float] = []
-        self._buffered_bytes = 0
+        self._capture_thread: threading.Thread | None = None
+        self._encode_thread: threading.Thread | None = None
+
         self._start_time = 0.0
         self._end_time = 0.0
         self._error: str | None = None
         self._canceled = False
 
+        self._webp_encoder: object | None = None
+        self._webp_start_ts = 0.0
+        self._webp_last_ts_ms = 0
+        self._encoded_count = 0
+        self._progress_cb: Callable[[int, int], None] | None = None
+
     @property
     def is_running(self) -> bool:
-        t = self._thread
+        t = self._capture_thread
         return t is not None and t.is_alive() and not self._stop_event.is_set()
 
     @property
@@ -428,8 +648,11 @@ class RegionRecorder:
 
     @property
     def frame_count(self) -> int:
-        with self._lock:
-            return len(self._frames)
+        return self._spool.total_pushed
+
+    @property
+    def disk_spill_events(self) -> int:
+        return self._spool.disk_spill_events
 
     @property
     def last_error(self) -> str | None:
@@ -437,48 +660,200 @@ class RegionRecorder:
             return self._error
 
     def start(self) -> None:
-        """Start the background screen-grab loop immediately."""
-        if self._thread is not None:
+        """Start background screen capture (and live WebP encoder thread when enabled)."""
+        if self._capture_thread is not None:
             return
         self._stop_event.clear()
         self._canceled = False
         self._start_time = time.perf_counter()
         self._end_time = 0.0
-        self._thread = threading.Thread(
+
+        if self._live_webp:
+            self._encode_thread = threading.Thread(
+                target=self._webp_encode_loop,
+                name="SnapshotterWebPEncoder",
+                daemon=True,
+            )
+            self._encode_thread.start()
+
+        self._capture_thread = threading.Thread(
             target=self._capture_loop,
             name="SnapshotterRegionRecorder",
             daemon=True,
         )
-        self._thread.start()
+        self._capture_thread.start()
+
+    def _stop_capture_thread(self) -> float:
+        self._stop_event.set()
+        cap_t = self._capture_thread
+        if cap_t is not None and cap_t.is_alive():
+            cap_t.join(timeout=5.0)
+        self._capture_thread = None
+        self._spool.mark_eof()
+        return self._end_time if self._end_time > 0.0 else time.perf_counter()
 
     def stop(self) -> tuple[list[Image.Image], list[float], float]:
-        """Stop capturing, join the worker thread, and return (frames, timestamps, end_time)."""
-        self._stop_event.set()
-        thread = self._thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=5.0)
-        self._thread = None
-        end_time = self._end_time if self._end_time > 0.0 else time.perf_counter()
-        with self._lock:
-            frames = list(self._frames)
-            timestamps = list(self._timestamps)
-            self._frames.clear()
-            self._timestamps.clear()
-            self._buffered_bytes = 0
+        """Stop capturing, drain buffered frames into memory, and return (frames, timestamps, end_time)."""
+        end_time = self._stop_capture_thread()
+        enc_t = self._encode_thread
+        if enc_t is not None and enc_t.is_alive():
+            self._spool.cleanup()
+            enc_t.join(timeout=5.0)
+        self._encode_thread = None
+        self._webp_encoder = None
+
+        frames: list[Image.Image] = []
+        timestamps: list[float] = []
+        try:
+            while True:
+                item = self._spool.pop(wait=False)
+                if item is None:
+                    break
+                img, ts = item
+                frames.append(img)
+                timestamps.append(ts)
+        finally:
+            self._spool.cleanup()
         return (frames, timestamps, end_time)
 
+    def finish_and_save(
+        self,
+        output_dir: Path,
+        prefix: str = "capture_",
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> Path:
+        """Stop capture, flush any spilled/queued frames, and write the final WebP or GIF file."""
+        with self._lock:
+            self._progress_cb = on_progress
+        try:
+            end_time = self._stop_capture_thread()
+
+            if self._live_webp:
+                enc_t = self._encode_thread
+                if enc_t is not None:
+                    while enc_t.is_alive():
+                        enc_t.join(timeout=0.1)
+                self._encode_thread = None
+
+                err = self.last_error
+                if err is not None:
+                    raise RuntimeError(err)
+
+                enc = self._webp_encoder
+                if enc is None or self._encoded_count == 0:
+                    raise RuntimeError("No video frames were captured.")
+
+                if on_progress is not None:
+                    on_progress(self._encoded_count, max(self._encoded_count, self._spool.total_pushed))
+
+                raw_end_ms = round((end_time - self._webp_start_ts) * 1000.0)
+                min_last = max(1, round(1000.0 / self._fps))
+                final_ts_ms = max(self._webp_last_ts_ms + min_last, raw_end_ms)
+                enc.add(None, final_ts_ms, False, 85, 100, 0)  # type: ignore[attr-defined]
+                data = enc.assemble(b"", b"", b"")  # type: ignore[attr-defined]
+                if data is None:
+                    raise RuntimeError("WebP animation encoder returned no data.")
+
+                out_path = generate_timestamp_path(output_dir, prefix=prefix, extension="webp")
+                out_path.write_bytes(data)
+                return out_path
+
+            # Fallback / GIF path: drain spool cleanly while compacting to palette frames
+            err = self.last_error
+            if err is not None:
+                raise RuntimeError(err)
+
+            total = max(1, self._spool.total_pushed)
+            frames: list[Image.Image] = []
+            timestamps: list[float] = []
+            idx = 0
+            while True:
+                item = self._spool.pop(wait=False)
+                if item is None:
+                    break
+                img, ts = item
+                if self._video_format == "gif":
+                    img = img.convert("P", palette=Image.Palette.ADAPTIVE)
+                frames.append(img)
+                timestamps.append(ts)
+                idx += 1
+                if on_progress is not None:
+                    on_progress(idx, total)
+
+            if not frames:
+                raise RuntimeError("No video frames were captured.")
+
+            return save_recorded_frames(
+                frames=frames,
+                timestamps=timestamps,
+                end_time=end_time,
+                output_dir=output_dir,
+                prefix=prefix,
+                video_format=self._video_format,
+                fps=self._fps,
+            )
+        finally:
+            with self._lock:
+                self._progress_cb = None
+            self._webp_encoder = None
+            self._spool.cleanup()
+
     def cancel(self) -> None:
-        """Stop capturing and discard all buffered frames."""
+        """Stop capture + encoding and discard all buffered or spilled frames."""
         self._canceled = True
         self._stop_event.set()
-        thread = self._thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=5.0)
-        self._thread = None
-        with self._lock:
-            self._frames.clear()
-            self._timestamps.clear()
-            self._buffered_bytes = 0
+        self._spool.cleanup()
+        for t in (self._capture_thread, self._encode_thread):
+            if t is not None and t.is_alive():
+                t.join(timeout=5.0)
+        self._capture_thread = None
+        self._encode_thread = None
+        self._webp_encoder = None
+
+    def _webp_encode_loop(self) -> None:
+        try:
+            while True:
+                if self._canceled:
+                    break
+                item = self._spool.pop(wait=True)
+                if item is None:
+                    break
+                img, captured_at = item
+                if self._canceled:
+                    break
+
+                if self._webp_encoder is None:
+                    self._webp_start_ts = captured_at
+                    ts_ms = 0
+                    self._webp_encoder = _webp.WebPAnimEncoder(
+                        img.size,
+                        0,
+                        0,
+                        False,
+                        3,
+                        5,
+                        False,
+                        False,
+                    )
+                else:
+                    raw_ms = round((captured_at - self._webp_start_ts) * 1000.0)
+                    ts_ms = max(self._webp_last_ts_ms + 1, raw_ms)
+
+                self._webp_encoder.add(img.getim(), ts_ms, False, 85, 100, 0)  # type: ignore[attr-defined]
+                self._webp_last_ts_ms = ts_ms
+                self._encoded_count += 1
+
+                cb = self._progress_cb
+                if cb is not None:
+                    cb(self._encoded_count, max(self._encoded_count, self._spool.total_pushed))
+        except Exception as exc:  # noqa: BLE001
+            with self._lock:
+                if self._error is None:
+                    self._error = str(exc)
+            self._stop_event.set()
+            self._spool.cleanup()
+            if self._on_error is not None and not self._canceled:
+                self._on_error(str(exc))
 
     def _capture_loop(self) -> None:
         monitor = {
@@ -500,20 +875,11 @@ class RegionRecorder:
                     if self._include_cursor:
                         raw_img = overlay_cursor_on_image(raw_img, self._rect)
                     processed = process_captured_image(raw_img, scale=self._scale)
-                    est_bytes = processed.width * processed.height * len(processed.getbands())
 
-                    limit_hit = False
-                    with self._lock:
-                        if self._canceled:
-                            break
-                        if self._frames and (self._buffered_bytes + est_bytes > self._max_buffer_bytes):
-                            limit_hit = True
-                        else:
-                            self._frames.append(processed)
-                            self._timestamps.append(captured_at)
-                            self._buffered_bytes += est_bytes
-
-                    if limit_hit:
+                    if self._canceled:
+                        break
+                    pushed = self._spool.push(processed, captured_at)
+                    if not pushed:
                         self._end_time = time.perf_counter()
                         self._stop_event.set()
                         if self._on_limit_reached is not None and not self._canceled:
@@ -533,12 +899,14 @@ class RegionRecorder:
         except Exception as exc:  # noqa: BLE001
             self._end_time = time.perf_counter()
             with self._lock:
-                self._error = str(exc)
+                if self._error is None:
+                    self._error = str(exc)
             if self._on_error is not None and not self._canceled:
                 self._on_error(str(exc))
         finally:
             if self._end_time <= 0.0:
                 self._end_time = time.perf_counter()
+            self._spool.mark_eof()
 
 
 def play_capture_chime() -> None:

@@ -19,7 +19,6 @@ from src.capture import (
     RegionRecorder,
     capture_region_to_file,
     play_capture_chime,
-    save_recorded_frames,
 )
 from src.config import AppConfig, load_config, save_config, validate_config
 from src.geometry import compute_scaled_output_size
@@ -98,6 +97,7 @@ class SnapshotterApp(QObject):
 
     _recording_limit_signal = Signal()
     _recording_error_signal = Signal(str)
+    _recording_progress_signal = Signal(int, int)
     _recording_saved_signal = Signal(object)
 
     def __init__(
@@ -138,6 +138,7 @@ class SnapshotterApp(QObject):
 
         self._recording_limit_signal.connect(self._on_recording_limit_reached, Qt.QueuedConnection)
         self._recording_error_signal.connect(self._on_recording_error, Qt.QueuedConnection)
+        self._recording_progress_signal.connect(self._on_recording_progress, Qt.QueuedConnection)
         self._recording_saved_signal.connect(self._on_recording_saved, Qt.QueuedConnection)
 
         self._hotkey_manager.triggered.connect(self.on_hotkey_triggered)
@@ -337,12 +338,15 @@ class SnapshotterApp(QObject):
         scale = self._overlay.scale
         fps = self._config.video_fps
         include_cursor = self._config.record_cursor
+        video_format = self._config.video_format
 
         recorder = RegionRecorder(
             rect=rect,
             scale=scale,
             fps=fps,
             include_cursor=include_cursor,
+            video_format=video_format,
+            live_encode=(video_format == "webp"),
             on_limit_reached=self._recording_limit_signal.emit,
             on_error=self._recording_error_signal.emit,
         )
@@ -374,46 +378,32 @@ class SnapshotterApp(QObject):
             self._refresh_tray_labels()
             return
 
-        frames, timestamps, end_time = recorder.stop()
-        if not frames:
-            err = recorder.last_error or "No video frames were captured."
-            self._overlay.close_overlay()
-            self._refresh_tray_labels()
-            if self._bridge.is_running:
-                self._bridge.broadcast_overlay_state(False)
-            self._tray.showMessage(
-                "Character Snapshotter",
-                f"Recording failed: {err}",
-                QSystemTrayIcon.Critical,
-                4000,
-            )
-            return
-
         self._saving_recording = True
         self._overlay.enter_recording_saving()
         self._tray.setToolTip(f"Character Snapshotter ({self._config.hotkey}) - Saving recording...")
 
         output_dir = Path(self._config.output_dir)
         prefix = self._config.filename_prefix
-        video_format = self._config.video_format
-        fps = self._config.video_fps
+
+        def _on_progress(done: int, total: int) -> None:
+            self._recording_progress_signal.emit(done, total)
 
         def _save_worker() -> None:
             try:
-                out_path = save_recorded_frames(
-                    frames=frames,
-                    timestamps=timestamps,
-                    end_time=end_time,
+                out_path = recorder.finish_and_save(
                     output_dir=output_dir,
                     prefix=prefix,
-                    video_format=video_format,
-                    fps=fps,
+                    on_progress=_on_progress,
                 )
                 self._recording_saved_signal.emit((out_path, None))
             except Exception as exc:  # noqa: BLE001
                 self._recording_saved_signal.emit((None, str(exc)))
 
         threading.Thread(target=_save_worker, name="SnapshotterVideoSave", daemon=True).start()
+
+    def _on_recording_progress(self, encoded: int, total: int) -> None:
+        if self._saving_recording:
+            self._overlay.update_saving_progress(encoded, total)
 
     def _on_recording_saved(self, result: object) -> None:
         self._saving_recording = False
@@ -443,7 +433,7 @@ class SnapshotterApp(QObject):
             self._stop_recording(save=True)
             self._tray.showMessage(
                 "Character Snapshotter",
-                "Recording buffer limit reached; saving clip.",
+                "Recording disk limit reached; saving clip.",
                 QSystemTrayIcon.Information,
                 3500,
             )

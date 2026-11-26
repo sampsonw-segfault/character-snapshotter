@@ -463,6 +463,15 @@ class FloatingHudWidget(QWidget):
         if self.rec_timer_label.text() != text:
             self.rec_timer_label.setText(text)
 
+    def update_saving_progress(self, encoded: int, total: int) -> None:
+        if not self._saving:
+            return
+        pct = 100 if total <= 0 else max(0, min(100, round((encoded / total) * 100)))
+        text = f"Saving... {pct}%"
+        if self.rec_timer_label.text() != text:
+            self.rec_timer_label.setText(text)
+            self.adjustSize()
+
     def commit_pending_edits(self) -> None:
         """Commit any in-progress typed text in spinboxes before capturing."""
         for spin in (self.cap_w_spin, self.cap_h_spin, self.scale_spin):
